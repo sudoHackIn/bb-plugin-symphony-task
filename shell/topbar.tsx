@@ -265,6 +265,15 @@ export function TasksTopbar({
             </span>
           </span>
         );
+      case "execution":
+        return (
+          <span className="flex items-center gap-2">
+            <span className="whitespace-nowrap font-semibold">Execution</span>
+            <span className="hidden text-xs font-normal text-muted-foreground @md:inline">
+              workers, eligibility, and budgets
+            </span>
+          </span>
+        );
       case "manage":
         return (
           <span className="flex items-center gap-2">
@@ -404,7 +413,9 @@ export function TasksTopbar({
       ) : null}
       {/* Refresh sits immediately left of the primary New task action. */}
       <RefreshTasksButton />
-      {route.kind !== "task" && route.kind !== "manage" ? (
+      {route.kind !== "task" &&
+      route.kind !== "manage" &&
+      route.kind !== "execution" ? (
         <Button
           size="sm"
           className="h-7 gap-1.5 max-md:pointer-coarse:h-9"

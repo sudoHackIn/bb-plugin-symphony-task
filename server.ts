@@ -8,9 +8,10 @@ import { registerDelegation } from "./delegate";
 import { registerLifecycle } from "./lifecycle";
 import { registerMentions } from "./mentions";
 import { registerProviderAwareTasksApi } from "./providers/api";
+import { registerExecution } from "./execution/index";
 
-export const TASKS_PLUGIN_NAME = "Task Manager";
-export const TASKS_PLUGIN_VERSION = "0.1.1";
+export const TASKS_PLUGIN_NAME = "Symphony Task";
+export const TASKS_PLUGIN_VERSION = "0.2.0";
 
 export const tasksRpcContract = defineRpcContract({
   ping: {
@@ -59,6 +60,7 @@ export default async function plugin(bb: BbPluginApi) {
   registerDelegation(bb, store);
   registerMentions(bb, store);
   await registerLifecycle(bb, store);
+  registerExecution(bb, store);
 
   bb.rpc.register(tasksRpcContract, {
     ping(): { ok: true; version: string } {

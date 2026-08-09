@@ -31,6 +31,7 @@ import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { TasksRefreshProvider } from "./refresh.js";
 import { TaskThreadToastListener } from "../notifications/toast.js";
+import { ExecutionView } from "../views/execution/index.js";
 
 /** Below this container width (panel splits, not the window) the sidebar
     auto-collapses. */
@@ -189,6 +190,8 @@ function RouteOutlet({
       return <ListView projectId={null} />;
     case "active":
       return <ListView projectId={null} activeOnly />;
+    case "execution":
+      return <ExecutionView />;
     case "manage":
       return <ManagePanel />;
     case "task":
@@ -394,7 +397,10 @@ function TasksAppShellContent({ subPath }: PluginNavPanelProps) {
             onBack={backFromTask}
           />
           <div className="min-h-0 flex-1 overflow-auto">
-            {noProjects && route.kind !== "task" && route.kind !== "manage" ? (
+            {noProjects &&
+            route.kind !== "task" &&
+            route.kind !== "manage" &&
+            route.kind !== "execution" ? (
               <NoProjectsEmptyState
                 onNewProject={() => setNewProjectOpen(true)}
               />

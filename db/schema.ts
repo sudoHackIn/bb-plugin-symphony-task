@@ -235,6 +235,89 @@ const MIGRATIONS = [
     END
     WHERE permission_mode IN ('workspace-write', 'readonly');
   `,
+  `
+    CREATE TABLE execution_config (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+      max_workers INTEGER NOT NULL DEFAULT 2 CHECK (max_workers BETWEEN 1 AND 32),
+      poll_interval_seconds INTEGER NOT NULL DEFAULT 30 CHECK (poll_interval_seconds BETWEEN 5 AND 3600),
+      default_token_budget INTEGER CHECK (default_token_budget IS NULL OR default_token_budget >= 1000),
+      max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts BETWEEN 1 AND 20),
+      updated_at TEXT NOT NULL
+    );
+
+    INSERT INTO execution_config (
+      id,
+      enabled,
+      max_workers,
+      poll_interval_seconds,
+      default_token_budget,
+      max_attempts,
+      updated_at
+    ) VALUES (1, 0, 2, 30, NULL, 3, CURRENT_TIMESTAMP);
+
+    CREATE TABLE project_execution_policies (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      mode TEXT NOT NULL DEFAULT 'off'
+        CHECK (mode IN ('off', 'opt_in', 'all_todo')),
+      preset_id TEXT REFERENCES presets(id) ON DELETE SET NULL,
+      max_workers INTEGER CHECK (max_workers IS NULL OR max_workers BETWEEN 1 AND 32),
+      token_budget INTEGER CHECK (token_budget IS NULL OR token_budget >= 1000),
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE task_execution_policies (
+      tracker TEXT NOT NULL CHECK (tracker IN ('local', 'beads', 'jira')),
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      work_item_id TEXT NOT NULL,
+      policy TEXT NOT NULL CHECK (policy IN ('inherit', 'enabled', 'disabled')),
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (tracker, project_id, work_item_id)
+    );
+
+    CREATE TABLE execution_runs (
+      id TEXT PRIMARY KEY,
+      tracker TEXT NOT NULL CHECK (tracker IN ('local', 'beads', 'jira')),
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      work_item_id TEXT NOT NULL,
+      task_key TEXT NOT NULL,
+      task_title TEXT NOT NULL,
+      external_version TEXT NOT NULL,
+      thread_id TEXT UNIQUE,
+      claim_id TEXT NOT NULL UNIQUE,
+      claim_expires_at TEXT,
+      status TEXT NOT NULL CHECK (status IN (
+        'claimed',
+        'starting',
+        'running',
+        'waiting_review',
+        'completed',
+        'failed',
+        'budget_exhausted',
+        'canceled',
+        'released'
+      )),
+      attempt INTEGER NOT NULL CHECK (attempt >= 1),
+      preset_id TEXT REFERENCES presets(id) ON DELETE SET NULL,
+      token_budget INTEGER CHECK (token_budget IS NULL OR token_budget >= 1000),
+      tokens_used INTEGER NOT NULL DEFAULT 0 CHECK (tokens_used >= 0),
+      last_event_seq INTEGER NOT NULL DEFAULT 0 CHECK (last_event_seq >= 0),
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      finished_at TEXT
+    );
+
+    CREATE UNIQUE INDEX execution_runs_one_active_item
+      ON execution_runs(tracker, project_id, work_item_id)
+      WHERE status IN ('claimed', 'starting', 'running');
+    CREATE INDEX execution_runs_status_updated
+      ON execution_runs(status, updated_at);
+    CREATE INDEX execution_runs_project_status
+      ON execution_runs(project_id, status, updated_at);
+    CREATE INDEX execution_runs_thread
+      ON execution_runs(thread_id) WHERE thread_id IS NOT NULL;
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

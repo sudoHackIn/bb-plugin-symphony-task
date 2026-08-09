@@ -47,6 +47,16 @@ function bindingKey(projectId: string): string {
   return `${BINDING_PREFIX}${projectId}`;
 }
 
+export async function readProjectProviderBinding(
+  bb: BbPluginApi,
+  projectId: string,
+): Promise<ProjectProviderBinding | null> {
+  return (
+    (await bb.storage.kv.get<ProjectProviderBinding>(bindingKey(projectId))) ??
+    null
+  );
+}
+
 async function beadsWorkspaceForProject(
   bb: BbPluginApi,
   linkedBbProjectId: string | null,

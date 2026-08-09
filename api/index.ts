@@ -27,7 +27,7 @@ import {
   type CommentProvider,
 } from "../shared/contract";
 
-type PluginDatabase = ReturnType<BbPluginApi["storage"]["database"]>;
+export type PluginDatabase = ReturnType<BbPluginApi["storage"]["database"]>;
 
 interface TaskLabelIdRow {
   task_id: string;
@@ -60,6 +60,7 @@ const PRESET_REASONING_LEVELS = [
 const MAX_THREAD_SEARCH_RESULTS = 10;
 
 export interface TasksApiStore {
+  readonly database: PluginDatabase;
   readonly tasks: TasksStore;
   transaction<T>(operation: () => T): T;
   taskLabelIds(taskIds: readonly string[]): Map<string, string[]>;
@@ -73,6 +74,7 @@ export function createStore(bb: BbPluginApi): TasksApiStore {
   const tasks = createTasksStore(database);
 
   return {
+    database,
     tasks,
     transaction<T>(operation: () => T): T {
       return database.transaction(operation)();

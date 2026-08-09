@@ -1,8 +1,8 @@
 {
-  "name": "bb-plugin-task-sources",
-  "version": "0.1.0",
+  "name": "bb-plugin-symphony-task",
+  "version": "0.2.0",
   "type": "module",
-  "description": "Manage Local, Beads, and Jira tasks in one BB workspace.",
+  "description": "Track tasks and orchestrate autonomous BB execution workers.",
   "scripts": {
     "build": "bb plugin build",
     "typecheck": "tsc --noEmit"
@@ -12,8 +12,8 @@
     "bbPluginSdk": "^0.4.1"
   },
   "bb": {
-    "name": "Task Manager",
-    "description": "Manage Local, Beads, and Jira tasks in one BB workspace.",
+    "name": "Symphony Task",
+    "description": "Track tasks and orchestrate autonomous BB execution workers.",
     "branding": {
       "icon": "ListTodo"
     },

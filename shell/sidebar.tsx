@@ -365,6 +365,13 @@ export function TasksSidebar({
             {summaries && activeTaskCount > 0 ? <WorkingDot /> : null}
             {summaries ? <RowCount value={activeTaskCount} /> : null}
           </SidebarRow>
+          <SidebarRow
+            active={route.kind === "execution"}
+            onClick={() => onNavigate({ kind: "execution" })}
+          >
+            <Icon name="Workflow" className="size-3.5 shrink-0" />
+            <span className="flex-1">Execution</span>
+          </SidebarRow>
         </div>
         {isLoading ? (
           <SidebarSkeleton />

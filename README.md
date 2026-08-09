@@ -1,6 +1,7 @@
-# Task Manager for bb
+# Symphony Task for bb
 
-Task Manager brings Local, Beads, and Jira tasks into one BB workspace.
+Symphony Task brings Local, Beads, and Jira tasks into one BB workspace and
+adds an opt-in execution engine for autonomous BB workers.
 Its shell, sidebar, list, board, task detail, editor, dialogs, and management
 screens follow the same UI and interaction model as BB Tasks.
 
@@ -109,13 +110,13 @@ board, sidebar, and task detail views.
 
 ## Jira configuration
 
-Open **Settings → Plugins → Task Manager**, or use:
+Open **Settings → Plugins → Symphony Task**, or use:
 
 ```sh
-bb plugin config task-sources set jiraBaseUrl https://company.atlassian.net
-bb plugin config task-sources set jiraEmail me@company.com
-bb plugin config task-sources set jiraApiToken YOUR_TOKEN
-bb plugin reload task-sources
+bb plugin config symphony-task set jiraBaseUrl https://company.atlassian.net
+bb plugin config symphony-task set jiraEmail me@company.com
+bb plugin config symphony-task set jiraApiToken YOUR_TOKEN
+bb plugin reload symphony-task
 ```
 
 The API token is a secret plugin setting and is never sent to the frontend.
@@ -135,6 +136,25 @@ microservices without giving the plugin write access to Jira. Local and Beads
 tasks inherit their Tasks project's linked bb project until task-specific
 targets are saved.
 
+## Autonomous execution
+
+The **Execution** screen controls the local-trackers execution engine:
+
+- the engine is paused after installation and never claims work implicitly;
+- global and per-project worker limits bound concurrent BB threads;
+- every project starts in `off`, then can use `opt-in` or `all Todo` mode;
+- a per-task override can inherit, always run, or never run;
+- an agent preset selects the provider, model, permissions, and worktree;
+- global and per-project token budgets are enforced from BB token-usage
+  events. Enforcement is best-effort and may overshoot slightly between an
+  event and the polling cycle that stops the thread;
+- runs release their claim when the task reaches review. Moving the task back
+  to Todo makes it eligible for a new execution.
+
+Only projects explicitly using **Local Tasks** are executable in this first
+version. Beads and Jira remain tracker adapters in the UI, but autonomous
+claims stay disabled until their distributed claim semantics are implemented.
+
 ## Development
 
 ```sh
@@ -145,4 +165,4 @@ bb plugin install .
 ```
 
 During development, use `bb plugin dev` or rebuild and run
-`bb plugin reload task-sources`.
+`bb plugin reload symphony-task`.

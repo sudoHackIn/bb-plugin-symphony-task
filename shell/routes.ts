@@ -10,6 +10,7 @@ export type TasksRoute =
   | { kind: "home" }
   | { kind: "all" }
   | { kind: "active" }
+  | { kind: "execution" }
   | { kind: "manage" }
   | { kind: "project"; projectId: string; view: TaskViewMode }
   | { kind: "task"; taskKey: string; projectId?: string };
@@ -19,6 +20,7 @@ export type TasksRoute =
  *   ""                      → no task list selected (default)
  *   "all"                   → all tasks
  *   "active"                → tasks with agents working
+ *   "execution"             → autonomous worker controls and run history
  *   "manage"                → manage panel (labels, presets, folders)
  *   "task/<taskKey>"        → task detail (e.g. task/TSK-4)
  *   "<projectId>"           → project list view
@@ -44,6 +46,7 @@ export function parseTasksRoute(rawSubPath: string): TasksRoute {
   if (head === undefined) return { kind: "home" };
   if (head === "all") return { kind: "all" };
   if (head === "active") return { kind: "active" };
+  if (head === "execution") return { kind: "execution" };
   if (head === "manage") return { kind: "manage" };
   if (head === "task") {
     const taskKey = segments[1];
@@ -73,6 +76,8 @@ export function tasksRouteToSubPath(route: TasksRoute): string {
       return "all";
     case "active":
       return "active";
+    case "execution":
+      return "execution";
     case "manage":
       return "manage";
     case "task":
