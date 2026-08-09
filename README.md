@@ -1,8 +1,8 @@
-# Task Sources for bb
+# Task Manager for bb
 
-A provider-based task manager built on the official bb Tasks plugin. Its shell,
-sidebar, list, board, task detail, editor, dialogs, and management screens are
-vendored from Tasks so the plugin follows the same UI and interaction model.
+Task Manager brings Local, Beads, and Jira tasks into one BB workspace.
+Its shell, sidebar, list, board, task detail, editor, dialogs, and management
+screens follow the same UI and interaction model as BB Tasks.
 
 ## Source model
 
@@ -109,7 +109,7 @@ board, sidebar, and task detail views.
 
 ## Jira configuration
 
-Open **Settings → Plugins → Task Sources**, or use:
+Open **Settings → Plugins → Task Manager**, or use:
 
 ```sh
 bb plugin config task-sources set jiraBaseUrl https://company.atlassian.net

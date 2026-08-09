@@ -188,6 +188,7 @@ export function providerTask(projectId: string, task: UnifiedTask, position: num
     createdAt: task.updatedAt,
     updatedAt: task.updatedAt,
     labelIds: [],
+    sourceLabels: task.labels,
     sourceId: task.sourceId as "beads" | "jira",
     nativeStatus: task.nativeStatus,
     blockedByTaskIds: task.blockedByIds.map((id) =>

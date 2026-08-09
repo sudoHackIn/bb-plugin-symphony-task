@@ -219,6 +219,7 @@ function apiTask(store: TasksApiStore, task: StoredTask): Task {
   return {
     ...task,
     labelIds: store.taskLabelIds([task.id]).get(task.id) ?? [],
+    sourceLabels: [],
     sourceId: "local",
     nativeStatus: task.status,
     blockedByTaskIds: [],
@@ -230,6 +231,7 @@ function apiTasks(store: TasksApiStore, tasks: StoredTask[]): Task[] {
   return tasks.map((task) => ({
     ...task,
     labelIds: labelsByTask.get(task.id) ?? [],
+    sourceLabels: [],
     sourceId: "local" as const,
     nativeStatus: task.status,
     blockedByTaskIds: [],

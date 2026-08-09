@@ -123,6 +123,8 @@ export const taskSchema = z
     createdAt: z.string(),
     updatedAt: z.string(),
     labelIds: z.array(idSchema),
+    /** Provider-native label names shown read-only for Beads/Jira tasks. */
+    sourceLabels: z.array(z.string()),
     sourceId: z.enum(["local", "beads", "jira"]),
     nativeStatus: z.string(),
     blockedByTaskIds: z.array(idSchema),

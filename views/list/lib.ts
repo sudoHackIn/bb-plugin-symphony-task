@@ -66,6 +66,7 @@ export interface LabelFilterOption {
  */
 export function labelFilterOptions(
   labels: readonly Label[],
+  sourceLabelNames: readonly string[] = [],
 ): LabelFilterOption[] {
   const byName = new Map<string, LabelFilterOption>();
   for (const label of labels) {
@@ -78,7 +79,32 @@ export function labelFilterOptions(
         labelIds: [label.id],
       });
   }
+  for (const name of sourceLabelNames) {
+    if (byName.has(name)) continue;
+    byName.set(name, {
+      name,
+      color: "var(--muted-foreground)",
+      labelIds: [],
+    });
+  }
   return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Any-of label-name matching across editable local and provider labels. */
+export function matchesLabelNames(
+  task: Task,
+  selectedNames: readonly string[],
+  labelsById: ReadonlyMap<string, Label>,
+): boolean {
+  if (selectedNames.length === 0) return true;
+  const selected = new Set(selectedNames);
+  return (
+    task.sourceLabels.some((name) => selected.has(name)) ||
+    task.labelIds.some((id) => {
+      const label = labelsById.get(id);
+      return label !== undefined && selected.has(label.name);
+    })
+  );
 }
 
 export function selectedLabelIds(
@@ -118,19 +144,19 @@ export function activeWorkLabel(
   return `${threads.length} agents working`;
 }
 
-export interface LabelOverflow {
-  visible: Label[];
-  hidden: Label[];
+export interface LabelOverflow<T> {
+  visible: T[];
+  hidden: T[];
 }
 
 /**
  * Splits row labels into visible chips and a "+N" overflow so rows stay a
  * bounded width no matter how many labels a task carries.
  */
-export function partitionLabels(
-  labels: readonly Label[],
+export function partitionLabels<T>(
+  labels: readonly T[],
   maxVisible: number,
-): LabelOverflow {
+): LabelOverflow<T> {
   if (labels.length <= maxVisible) {
     return { visible: [...labels], hidden: [] };
   }

@@ -313,18 +313,47 @@ function TaskEmbedPanelContent({ params }: PluginThreadPanelProps) {
     );
   }
   return (
+    <TaskEmbedPanelTask
+      initialTaskKey={taskKey.trim()}
+      initialProjectId={projectId}
+    />
+  );
+}
+
+function TaskEmbedPanelTask({
+  initialTaskKey,
+  initialProjectId,
+}: {
+  initialTaskKey: string;
+  initialProjectId?: string;
+}) {
+  const [selection, setSelection] = useState({
+    taskKey: initialTaskKey,
+    projectId: initialProjectId,
+  });
+
+  return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border pb-2">
         <div className="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground">
-          {taskKey.trim()}
+          {selection.taskKey}
         </div>
         <OpenInTasksButton
-          label={`Open ${taskKey.trim()} in Tasks`}
-          subPath={taskDetailSubPath(taskKey.trim())}
+          label={`Open ${selection.taskKey} in Tasks`}
+          subPath={taskDetailSubPath(
+            selection.taskKey,
+            selection.projectId,
+          )}
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <DetailView taskKey={taskKey.trim()} projectId={projectId} />
+        <DetailView
+          taskKey={selection.taskKey}
+          projectId={selection.projectId}
+          onOpenRelatedTask={(task) =>
+            setSelection({ taskKey: task.key, projectId: task.projectId })
+          }
+        />
       </div>
     </div>
   );

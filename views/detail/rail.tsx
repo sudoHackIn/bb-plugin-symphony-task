@@ -402,6 +402,17 @@ function LabelsMenu({
   );
 }
 
+function SourceLabelChip({ name }: { name: string }) {
+  return (
+    <span
+      title="Source label · read-only"
+      className="inline-flex items-center rounded-md border border-border bg-secondary px-2 py-0.5 text-xs text-foreground"
+    >
+      {name}
+    </span>
+  );
+}
+
 /**
  * Editable "Dispatch target" row: shows the linked bb project (or an invite
  * to link one) and opens a picker that saves via updateProject. The rail's
@@ -665,15 +676,20 @@ export function PropertiesRail({
         {taskLabels.map((label) => (
           <LabelChip key={label.id} label={label} />
         ))}
-        <LabelsMenu task={task} labels={labels} onUpdate={onUpdate}>
-          <button
-            type="button"
-            aria-label="Edit labels"
-            className="inline-flex items-center rounded-md border border-dashed border-border px-1.5 py-0.5 text-muted-foreground hover:border-input hover:text-foreground"
-          >
-            <Icon name="Plus" className="size-3" />
-          </button>
-        </LabelsMenu>
+        {task.sourceLabels.map((name) => (
+          <SourceLabelChip key={name} name={name} />
+        ))}
+        {task.sourceId === "local" ? (
+          <LabelsMenu task={task} labels={labels} onUpdate={onUpdate}>
+            <button
+              type="button"
+              aria-label="Edit labels"
+              className="inline-flex items-center rounded-md border border-dashed border-border px-1.5 py-0.5 text-muted-foreground hover:border-input hover:text-foreground"
+            >
+              <Icon name="Plus" className="size-3" />
+            </button>
+          </LabelsMenu>
+        ) : null}
       </div>
 
       <div className="mb-1 mt-3 text-2xs font-semibold text-muted-foreground">
@@ -791,15 +807,20 @@ export function InlineProperties({
       {taskLabels.map((label) => (
         <LabelChip key={label.id} label={label} />
       ))}
-      <LabelsMenu task={task} labels={labels} onUpdate={onUpdate}>
-        <button
-          type="button"
-          aria-label="Edit labels"
-          className="inline-flex items-center rounded-md border border-dashed border-border px-2 py-1 text-muted-foreground hover:border-input hover:text-foreground"
-        >
-          <Icon name="Plus" className="size-3" />
-        </button>
-      </LabelsMenu>
+      {task.sourceLabels.map((name) => (
+        <SourceLabelChip key={name} name={name} />
+      ))}
+      {task.sourceId === "local" ? (
+        <LabelsMenu task={task} labels={labels} onUpdate={onUpdate}>
+          <button
+            type="button"
+            aria-label="Edit labels"
+            className="inline-flex items-center rounded-md border border-dashed border-border px-2 py-1 text-muted-foreground hover:border-input hover:text-foreground"
+          >
+            <Icon name="Plus" className="size-3" />
+          </button>
+        </LabelsMenu>
+      ) : null}
       <ExecutionTargetsMenu
         task={task}
         onError={onError}

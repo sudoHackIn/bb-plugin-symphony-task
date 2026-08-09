@@ -2,7 +2,7 @@
   "name": "bb-plugin-task-sources",
   "version": "0.1.0",
   "type": "module",
-  "description": "A provider-based task manager for BB with Beads and Jira Cloud sources.",
+  "description": "Manage Local, Beads, and Jira tasks in one BB workspace.",
   "scripts": {
     "build": "bb plugin build",
     "typecheck": "tsc --noEmit"
@@ -12,8 +12,8 @@
     "bbPluginSdk": "^0.4.1"
   },
   "bb": {
-    "name": "Task Sources",
-    "description": "Browse and manage tasks from Beads and Jira in one BB workspace.",
+    "name": "Task Manager",
+    "description": "Manage Local, Beads, and Jira tasks in one BB workspace.",
     "branding": {
       "icon": "ListTodo"
     },

@@ -36,6 +36,8 @@ export interface DetailViewProps {
   taskKey: string;
   /** Known project scope avoids provider-wide task discovery. */
   projectId?: string;
+  /** Override relationship navigation, e.g. to stay inside a thread panel. */
+  onOpenRelatedTask?: (task: Task) => void;
 }
 
 const DESCRIPTION_SAVE_DELAY_MS = 800;
@@ -113,13 +115,14 @@ function SubTasksSection({
   task,
   subtasks,
   onCreate,
+  onOpenTask,
 }: {
   ref: React.Ref<HTMLElement>;
   task: Task;
   subtasks: Task[];
   onCreate: (title: string) => Promise<boolean>;
+  onOpenTask: (task: Task) => void;
 }) {
-  const navigation = useTasksNavigation();
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
@@ -135,25 +138,30 @@ function SubTasksSection({
 
   return (
     <section ref={ref} className="mt-5">
+      <div className="mb-1 flex items-center justify-between">
+        <h2 className="text-xs font-semibold text-muted-foreground">
+          Sub-tasks
+          {subtasks.length > 0 ? ` (${subtasks.length})` : ""}
+        </h2>
+      </div>
       {subtasks.map((subtask) => (
         <button
           key={subtask.id}
           type="button"
           className="flex h-8 w-full items-center gap-2 border-b border-border-hairline px-0.5 text-left text-sm hover:bg-state-hover"
           title={STATUS_LABELS[subtask.status]}
-          onClick={() =>
-            navigation.go({
-              kind: "task",
-              taskKey: subtask.key,
-              projectId: subtask.projectId,
-            })
-          }
+          aria-label={`Open sub-task ${subtask.key}: ${subtask.title}`}
+          onClick={() => onOpenTask(subtask)}
         >
           <StatusIcon status={subtask.status} />
           <span className="shrink-0 text-xs text-muted-foreground">
             {subtask.key}
           </span>
           <span className="min-w-0 truncate">{subtask.title}</span>
+          <Icon
+            name="ChevronRight"
+            className="ml-auto size-3.5 shrink-0 text-muted-foreground"
+          />
         </button>
       ))}
       {adding ? (
@@ -201,7 +209,13 @@ function DetailSkeleton() {
   );
 }
 
-function TaskDetail({ task }: { task: Task }) {
+function TaskDetail({
+  task,
+  onOpenRelatedTask,
+}: {
+  task: Task;
+  onOpenRelatedTask?: (task: Task) => void;
+}) {
   const rpc = useTasksRpc();
   const providerRpc = useRpc<TaskProvidersRpcContract>();
   const navigation = useTasksNavigation();
@@ -246,6 +260,19 @@ function TaskDetail({ task }: { task: Task }) {
       }),
     ["tasks:changed"],
     [task.id, task.projectId],
+  );
+  const parentTask = useTasksQuery(
+    async (query) => {
+      if (task.parentTaskId === null) return null;
+      return (
+        await query.call("getTask", {
+          taskId: task.parentTaskId,
+          projectId: task.projectId,
+        })
+      ).task;
+    },
+    ["tasks:changed"],
+    [task.parentTaskId, task.projectId],
   );
   const labels = useTasksQuery(
     async (query) =>
@@ -375,6 +402,17 @@ function TaskDetail({ task }: { task: Task }) {
 
   const mentionItems = useMentionItems();
   const navigate = useBbNavigate();
+  const openRelatedTask = (relatedTask: Task) => {
+    if (onOpenRelatedTask) {
+      onOpenRelatedTask(relatedTask);
+      return;
+    }
+    navigation.go({
+      kind: "task",
+      taskKey: relatedTask.key,
+      projectId: relatedTask.projectId,
+    });
+  };
 
   const descriptionValue =
     draft && draft.taskId === task.id ? draft.markdown : task.description;
@@ -382,6 +420,52 @@ function TaskDetail({ task }: { task: Task }) {
     <div className="@container flex min-h-full flex-col bg-surface-recessed-solid p-3">
       <div className="flex flex-1 items-stretch rounded-lg border border-border bg-card shadow-2xs">
         <div className="mx-auto w-full min-w-0 max-w-[55rem] flex-1 px-7 pb-16 pt-8 @3xl:px-13 @3xl:pt-11">
+          {parentTask.data ? (
+            <nav
+              aria-label="Task hierarchy"
+              className="mb-3 flex min-w-0 items-center gap-1.5 overflow-hidden text-xs text-muted-foreground"
+            >
+              {project ? (
+                <>
+                  <button
+                    type="button"
+                    className="min-w-0 truncate font-medium hover:text-foreground"
+                    title={`Open project ${project.name}`}
+                    onClick={() =>
+                      navigation.go({
+                        kind: "project",
+                        projectId: project.id,
+                        view: "list",
+                      })
+                    }
+                  >
+                    {project.name}
+                  </button>
+                  <Icon
+                    name="ChevronRight"
+                    className="size-3 shrink-0"
+                  />
+                </>
+              ) : null}
+              <button
+                type="button"
+                className="flex min-w-0 max-w-[55%] items-center gap-1.5 hover:text-foreground"
+                title={`${parentTask.data.key} · ${parentTask.data.title}`}
+                aria-label={`Open parent task ${parentTask.data.key}: ${parentTask.data.title}`}
+                onClick={() => openRelatedTask(parentTask.data!)}
+              >
+                <span className="shrink-0 font-medium">
+                  {parentTask.data.key}
+                </span>
+                <span className="min-w-0 truncate">
+                  {parentTask.data.title}
+                </span>
+              </button>
+              <Icon name="ChevronRight" className="size-3 shrink-0" />
+              <span className="min-w-0 truncate font-medium">{task.key}</span>
+            </nav>
+          ) : null}
+
           {subtasks.data?.length ? (
             <div className="mb-4 flex flex-wrap items-center gap-2">
               <SubTaskDonut
@@ -478,6 +562,7 @@ function TaskDetail({ task }: { task: Task }) {
             task={task}
             subtasks={subtasks.data ?? []}
             onCreate={createSubtask}
+            onOpenTask={openRelatedTask}
           />
 
           {/* With no attached threads the section disappears entirely; the
@@ -525,10 +610,12 @@ export function ResolvedDetailView({
   taskKey,
   task,
   error,
+  onOpenRelatedTask,
 }: {
   taskKey: string;
   task: Task | null | undefined;
   error: string | null;
+  onOpenRelatedTask?: (task: Task) => void;
 }) {
   if (task === undefined) {
     return error ? (
@@ -547,10 +634,14 @@ export function ResolvedDetailView({
       </div>
     );
   }
-  return <TaskDetail task={task} />;
+  return <TaskDetail task={task} onOpenRelatedTask={onOpenRelatedTask} />;
 }
 
-export function DetailView({ taskKey, projectId }: DetailViewProps) {
+export function DetailView({
+  taskKey,
+  projectId,
+  onOpenRelatedTask,
+}: DetailViewProps) {
   const query = useTasksQuery(
     async (rpc) =>
       (
@@ -567,6 +658,7 @@ export function DetailView({ taskKey, projectId }: DetailViewProps) {
       taskKey={taskKey}
       task={query.data}
       error={query.error}
+      onOpenRelatedTask={onOpenRelatedTask}
     />
   );
 }

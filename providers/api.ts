@@ -459,6 +459,9 @@ export function registerProviderAwareTasksApi(
       const match = await findExternal((task) => task.id === input.taskId);
       if (!match) throw new Error(`Task not found: ${input.taskId}`);
       if (match.readOnly) throw new Error("Jira tasks are read-only");
+      if (input.labelIds !== undefined) {
+        throw new Error("Source labels are read-only");
+      }
       let parentId: string | null | undefined;
       if (input.parentTaskId !== undefined) {
         if (input.parentTaskId === null) parentId = null;

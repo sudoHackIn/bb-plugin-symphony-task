@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -20,6 +21,22 @@ import {
 } from "../../shell/data.js";
 import { useTasksNavigation } from "../../shell/routes.js";
 import { NewTaskDialog } from "../manage/index.js";
+import {
+  ListFilterBar,
+  type ListFilterState,
+} from "../list/filter-bar.js";
+import {
+  labelFilterOptions,
+  matchesLabelNames,
+} from "../list/lib.js";
+import {
+  listPreferenceScope,
+  loadListPreference,
+  storeListPreference,
+  type ListPreference,
+} from "../list/list-preference.js";
+import { matchesFilters } from "../list/optimistic.js";
+import { sortTasks, type TaskSort } from "../../shared/sort.js";
 import {
   applyBoardMove,
   BOARD_STATUSES,
@@ -57,6 +74,7 @@ const EMPTY_META: BoardCardMeta = {
   subDone: 0,
   subTotal: 0,
 };
+const EMPTY_LABELS_BY_ID = new Map<string, Label>();
 
 async function fetchBoard(
   rpc: TasksRpc,
@@ -211,6 +229,8 @@ function TaskCard({
   const labels = task.labelIds
     .map((labelId) => labelsById.get(labelId))
     .filter((label): label is Label => label !== undefined);
+  const visibleSourceLabels = task.sourceLabels.slice(0, 3);
+  const hiddenSourceLabels = task.sourceLabels.slice(3);
   return (
     <div
       ref={cardRef}
@@ -247,6 +267,23 @@ function TaskCard({
             {label.name}
           </span>
         ))}
+        {visibleSourceLabels.map((name) => (
+          <span
+            key={name}
+            title="Source label · read-only"
+            className="rounded-md border border-border bg-secondary px-1.5 text-2xs text-muted-foreground"
+          >
+            {name}
+          </span>
+        ))}
+        {hiddenSourceLabels.length > 0 ? (
+          <span
+            title={hiddenSourceLabels.join(", ")}
+            className="rounded-md border border-border px-1.5 text-2xs text-muted-foreground"
+          >
+            +{hiddenSourceLabels.length}
+          </span>
+        ) : null}
         {meta.subTotal > 0 && !ghost ? (
           <button
             type="button"
@@ -340,6 +377,49 @@ export function BoardView({ projectId }: BoardViewProps) {
     ["tasks:changed", "projects:changed", "threads:changed"],
     [projectId],
   );
+  const preferenceScope = listPreferenceScope(projectId, false);
+  const [preference, setPreference] = useState<ListPreference>(() =>
+    loadListPreference(preferenceScope),
+  );
+  useEffect(() => {
+    setPreference(loadListPreference(preferenceScope));
+  }, [preferenceScope]);
+  const filters = preference.filters;
+  const sort = preference.sort;
+  const setFilters = (next: ListFilterState) => {
+    setPreference((current) => {
+      const updated: ListPreference = { filters: next, sort: current.sort };
+      storeListPreference(preferenceScope, updated);
+      return updated;
+    });
+  };
+  const setSort = (next: TaskSort) => {
+    setPreference((current) => {
+      const updated: ListPreference = { filters: current.filters, sort: next };
+      storeListPreference(preferenceScope, updated);
+      return updated;
+    });
+  };
+  const labelsById = board.data?.labelsById ?? EMPTY_LABELS_BY_ID;
+  const labelOptions = useMemo(
+    () =>
+      labelFilterOptions(
+        [...labelsById.values()],
+        (board.data?.tasks ?? []).flatMap((task) => task.sourceLabels),
+      ),
+    [board.data, labelsById],
+  );
+  const displayTasks = useMemo(() => {
+    if (!board.data) return undefined;
+    return sortTasks(
+      board.data.tasks.filter(
+        (task) =>
+          matchesFilters(task, filters.statuses, filters.priorities, []) &&
+          matchesLabelNames(task, filters.labelNames, labelsById),
+      ),
+      sort,
+    );
+  }, [board.data, filters, labelsById, sort]);
 
   // Local column state renders instantly on drop; realtime refetches replace
   // it with the server's authoritative fractional-position order.
@@ -348,8 +428,8 @@ export function BoardView({ projectId }: BoardViewProps) {
     setColumns(undefined);
   }, [projectId]);
   useEffect(() => {
-    if (board.data) setColumns(groupColumns(board.data.tasks));
-  }, [board.data]);
+    if (displayTasks) setColumns(groupColumns(displayTasks));
+  }, [displayTasks]);
   const columnsRef = useRef(columns);
   columnsRef.current = columns;
 
@@ -439,7 +519,7 @@ export function BoardView({ projectId }: BoardViewProps) {
     event: ReactPointerEvent<HTMLDivElement>,
     task: Task,
   ) => {
-    if (event.button !== 0 || dragCleanupRef.current) return;
+    if (sort !== "manual" || event.button !== 0 || dragCleanupRef.current) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const start = {
       x: event.clientX,
@@ -544,7 +624,6 @@ export function BoardView({ projectId }: BoardViewProps) {
     return <BoardSkeleton />;
   }
 
-  const labelsById = board.data?.labelsById ?? new Map<string, Label>();
   const metaByTaskId =
     board.data?.metaByTaskId ?? new Map<string, BoardCardMeta>();
   const ghostTask = drag
@@ -585,7 +664,11 @@ export function BoardView({ projectId }: BoardViewProps) {
             if (element) cardRefs.current.set(task.id, element);
             else cardRefs.current.delete(task.id);
           }}
-          onPointerDown={(event) => handleCardPointerDown(event, task)}
+          onPointerDown={
+            sort === "manual"
+              ? (event) => handleCardPointerDown(event, task)
+              : undefined
+          }
           onClick={() => openTask(task)}
           onToggleExpanded={() => toggleTaskExpanded(task.id)}
           onOpenSubtask={openTask}
@@ -631,31 +714,41 @@ export function BoardView({ projectId }: BoardViewProps) {
   };
 
   return (
-    <div
-      ref={boardRef}
-      className={cn(
-        "flex h-full items-start gap-3 overflow-x-auto p-4",
-        drag !== null && "cursor-grabbing",
-      )}
-    >
-      {visibleBoardStatuses(columns).map(renderColumn)}
-      {drag && ghostTask ? (
-        <div
-          className="pointer-events-none fixed z-50"
-          style={{
-            left: drag.x - drag.offsetX,
-            top: drag.y - drag.offsetY,
-            width: drag.width,
-          }}
-        >
-          <TaskCard
-            task={ghostTask}
-            labelsById={labelsById}
-            meta={metaByTaskId.get(ghostTask.id) ?? EMPTY_META}
-            ghost
-          />
-        </div>
-      ) : null}
+    <div className="flex h-full min-h-0 flex-col">
+      <ListFilterBar
+        filters={filters}
+        onChange={setFilters}
+        sort={sort}
+        onSortChange={setSort}
+        labelOptions={labelOptions}
+        taskCount={displayTasks?.length}
+      />
+      <div
+        ref={boardRef}
+        className={cn(
+          "flex min-h-0 flex-1 items-start gap-3 overflow-x-auto p-4",
+          drag !== null && "cursor-grabbing",
+        )}
+      >
+        {visibleBoardStatuses(columns).map(renderColumn)}
+        {drag && ghostTask ? (
+          <div
+            className="pointer-events-none fixed z-50"
+            style={{
+              left: drag.x - drag.offsetX,
+              top: drag.y - drag.offsetY,
+              width: drag.width,
+            }}
+          >
+            <TaskCard
+              task={ghostTask}
+              labelsById={labelsById}
+              meta={metaByTaskId.get(ghostTask.id) ?? EMPTY_META}
+              ghost
+            />
+          </div>
+        ) : null}
+      </div>
       <NewTaskDialog
         open={quickAddStatus !== null}
         onOpenChange={(open) => {

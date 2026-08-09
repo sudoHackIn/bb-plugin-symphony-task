@@ -400,7 +400,7 @@ export function TaskContextMenu({
           </ContextMenuSubContent>
         </ContextMenuSub>
 
-        {projectLabels.length > 0 ? (
+        {task.sourceId === "local" && projectLabels.length > 0 ? (
           <ContextMenuSub>
             <ContextMenuSubTrigger>
               <Icon name="ListTodo" className="size-3.5" />

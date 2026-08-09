@@ -29,7 +29,7 @@ import {
 import {
   groupTasksByStatus,
   labelFilterOptions,
-  selectedLabelIds,
+  matchesLabelNames,
   STATUS_LABELS,
 } from "./lib.js";
 import { editedTasks, matchesFilters } from "./optimistic.js";
@@ -128,24 +128,12 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     [projectId, projects.data],
   );
   const labels = useLabels(labelProjectIds);
-  const labelOptions = useMemo(
-    () => labelFilterOptions(labels.data ?? []),
-    [labels.data],
-  );
-  // null = no label filter. Once the catalog is loaded, unresolved selected
-  // names become an active empty id list so the query matches nothing (not
-  // every task). While labels are still loading, defer the filter to avoid a
-  // flash of empty results before options arrive.
-  const labelIds = useMemo((): readonly string[] | null => {
-    if (filters.labelNames.length === 0) return null;
-    if (labels.data === undefined) return null;
-    return selectedLabelIds(labelOptions, filters.labelNames);
-  }, [filters.labelNames, labelOptions, labels.data]);
-
   const tasksQuery = useListTasks(projectId, activeOnly, {
     statuses: filters.statuses,
     priorities: filters.priorities,
-    labelIds,
+    // Label names are filtered client-side because provider-native labels do
+    // not have local label ids.
+    labelIds: null,
   });
   const meta = useTaskListMeta(tasksQuery.data);
   const edits = useListTaskEdits(tasksQuery.data, (message) =>
@@ -155,6 +143,14 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   const labelsById = useMemo(
     () => new Map((labels.data ?? []).map((label) => [label.id, label])),
     [labels.data],
+  );
+  const labelOptions = useMemo(
+    () =>
+      labelFilterOptions(
+        labels.data ?? [],
+        (tasksQuery.data ?? []).flatMap((task) => task.sourceLabels),
+      ),
+    [labels.data, tasksQuery.data],
   );
   const labelsByProject = useMemo(() => {
     const map = new Map<string, Label[]>();
@@ -182,15 +178,16 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
         task,
         filters.statuses,
         filters.priorities,
-        labelIds ?? [],
-      ),
+        [],
+      ) && matchesLabelNames(task, filters.labelNames, labelsById),
     );
   }, [
     tasksQuery.data,
     edits.entries,
     filters.statuses,
     filters.priorities,
-    labelIds,
+    filters.labelNames,
+    labelsById,
   ]);
   const groups = useMemo(
     () => groupTasksByStatus(sortTasks(displayTasks ?? [], sort)),

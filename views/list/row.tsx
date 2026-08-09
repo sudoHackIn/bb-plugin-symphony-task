@@ -44,14 +44,30 @@ function ActiveChip({ threads }: { threads: readonly TaskThread[] }) {
   );
 }
 
-function LabelChip({ label }: { label: Label }) {
+interface RowLabel {
+  key: string;
+  name: string;
+  color: string | null;
+  source: boolean;
+}
+
+function LabelChip({ label }: { label: RowLabel }) {
   return (
-    <span className={`${RAIL_CHIP_CLASS} max-w-32`}>
-      <span
-        aria-hidden
-        className="size-1.5 shrink-0 rounded-full"
-        style={{ backgroundColor: label.color }}
-      />
+    <span
+      title={label.source ? "Source label · read-only" : undefined}
+      className={cn(
+        RAIL_CHIP_CLASS,
+        "max-w-32",
+        label.source && "bg-secondary",
+      )}
+    >
+      {label.color !== null ? (
+        <span
+          aria-hidden
+          className="size-1.5 shrink-0 rounded-full"
+          style={{ backgroundColor: label.color }}
+        />
+      ) : null}
       <span className="truncate">{label.name}</span>
     </span>
   );
@@ -61,14 +77,14 @@ function LabelChipRow({
   labels,
   maxVisible,
 }: {
-  labels: readonly Label[];
+  labels: readonly RowLabel[];
   maxVisible: number;
 }) {
   const { visible, hidden } = partitionLabels(labels, maxVisible);
   return (
     <>
       {visible.map((label) => (
-        <LabelChip key={label.id} label={label} />
+        <LabelChip key={label.key} label={label} />
       ))}
       {hidden.length > 0 ? (
         <span
@@ -95,7 +111,27 @@ function LabelChips({
   task: Task;
   labelsById: Map<string, Label>;
 }) {
-  const labels = task.labelIds.flatMap((id) => labelsById.get(id) ?? []);
+  const localLabels = task.labelIds.flatMap((id) => labelsById.get(id) ?? []);
+  const localNames = new Set(localLabels.map((label) => label.name));
+  const labels: RowLabel[] = [
+    ...localLabels.map((label) => ({
+      key: label.id,
+      name: label.name,
+      color: label.color,
+      source: false,
+    })),
+    ...task.sourceLabels
+      .filter(
+        (name, index, names) =>
+          !localNames.has(name) && names.indexOf(name) === index,
+      )
+      .map((name) => ({
+        key: `source:${name}`,
+        name,
+        color: null,
+        source: true,
+      })),
+  ];
   if (labels.length === 0) return null;
   return (
     <>
