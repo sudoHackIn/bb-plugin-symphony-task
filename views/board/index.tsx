@@ -1,0 +1,669 @@
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
+import {
+  TASK_STATUSES,
+  type Label,
+  type Task,
+  type TaskStatus,
+  type TaskThread,
+} from "../../shared/contract.js";
+import {
+  listAllTasks,
+  useTasksQuery,
+  useTasksRpc,
+  type TasksRpc,
+} from "../../shell/data.js";
+import { useTasksNavigation } from "../../shell/routes.js";
+import { NewTaskDialog } from "../manage/index.js";
+import {
+  applyBoardMove,
+  BOARD_STATUSES,
+  dropIndexForPointer,
+  dropNeighborsForIndex,
+  visibleBoardStatuses,
+} from "./drop-position.js";
+import { PriorityIcon, STATUS_LABELS, StatusIcon } from "./icons.js";
+import { Button } from "@/components/ui/button";
+import { Icon } from "@/components/ui/icon";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+
+const DRAG_THRESHOLD_PX = 5;
+
+interface BoardCardMeta {
+  workingThreads: TaskThread[];
+  attachmentCount: number;
+  subtasks: Task[];
+  subDone: number;
+  subTotal: number;
+}
+
+interface BoardData {
+  /** Top-level tasks in server order (status, then ascending position). */
+  tasks: Task[];
+  labelsById: Map<string, Label>;
+  metaByTaskId: Map<string, BoardCardMeta>;
+}
+
+const EMPTY_META: BoardCardMeta = {
+  workingThreads: [],
+  attachmentCount: 0,
+  subtasks: [],
+  subDone: 0,
+  subTotal: 0,
+};
+
+async function fetchBoard(
+  rpc: TasksRpc,
+  projectId: string,
+): Promise<BoardData> {
+  const tasks = await listAllTasks(rpc, { projectId });
+  const topLevel = tasks.filter((task) => task.parentTaskId === null);
+
+  // Everything below decorates cards; a failure hides chips, never the board.
+  const labels = await rpc.call("listLabels", { projectId }).then(
+    (result) => result.labels,
+    () => [],
+  );
+  const subtasksByParentId = new Map<string, Task[]>();
+  for (const task of tasks) {
+    if (task.parentTaskId === null) continue;
+    const subtasks = subtasksByParentId.get(task.parentTaskId) ?? [];
+    subtasks.push(task);
+    subtasksByParentId.set(task.parentTaskId, subtasks);
+  }
+  const activeTaskIds = await listAllTasks(rpc, {
+    projectId,
+    activeOnly: true,
+  }).then(
+    (result) => new Set(result.map((task) => task.id)),
+    () => new Set<string>(),
+  );
+  const workingByTaskId = new Map<string, TaskThread[]>();
+  await Promise.all(
+    topLevel
+      .filter((task) => activeTaskIds.has(task.id))
+      .map(async (task) => {
+        const threads = await rpc
+          .call("listTaskThreads", { taskId: task.id })
+          .then(
+            (result) => result.taskThreads,
+            () => [],
+          );
+        workingByTaskId.set(
+          task.id,
+          threads.filter(
+            (thread) =>
+              thread.liveStatus === "working" ||
+              thread.liveStatus === "starting",
+          ),
+        );
+      }),
+  );
+  const attachmentCounts = new Map<string, number>();
+  await Promise.all(
+    topLevel.map(async (task) => {
+      const count = await rpc.call("listAttachments", { taskId: task.id }).then(
+        (result) => result.attachments.length,
+        () => 0,
+      );
+      attachmentCounts.set(task.id, count);
+    }),
+  );
+
+  return {
+    tasks: topLevel,
+    labelsById: new Map(labels.map((label) => [label.id, label])),
+    metaByTaskId: new Map(
+      topLevel.map((task) => [
+        task.id,
+        (() => {
+          const subtasks = subtasksByParentId.get(task.id) ?? [];
+          return {
+            workingThreads: workingByTaskId.get(task.id) ?? [],
+            attachmentCount: attachmentCounts.get(task.id) ?? 0,
+            subtasks,
+            subDone: subtasks.filter((subtask) => subtask.status === "done")
+              .length,
+            subTotal: subtasks.length,
+          };
+        })(),
+      ]),
+    ),
+  };
+}
+
+type ColumnMap = Record<TaskStatus, Task[]>;
+
+function groupColumns(tasks: readonly Task[]): ColumnMap {
+  const columns: ColumnMap = {
+    backlog: [],
+    todo: [],
+    in_progress: [],
+    in_review: [],
+    done: [],
+    canceled: [],
+  };
+  for (const task of tasks) columns[task.status].push(task);
+  return columns;
+}
+
+interface DragState {
+  taskId: string;
+  x: number;
+  y: number;
+  offsetX: number;
+  offsetY: number;
+  width: number;
+  overStatus: TaskStatus | null;
+  dropIndex: number;
+}
+
+function WorkingAgentsChip({ threads }: { threads: TaskThread[] }) {
+  if (threads.length === 0) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-1 font-medium text-success">
+      <span
+        aria-hidden
+        className="size-1.5 shrink-0 animate-pulse rounded-full bg-success"
+      />
+      <span className="truncate">
+        {threads.length === 1
+          ? threads[0]!.presetName
+          : `${threads.length} agents`}
+      </span>
+    </span>
+  );
+}
+
+interface TaskCardProps {
+  task: Task;
+  labelsById: Map<string, Label>;
+  meta: BoardCardMeta;
+  ghost?: boolean;
+  dragging?: boolean;
+  expanded?: boolean;
+  cardRef?: (element: HTMLDivElement | null) => void;
+  onPointerDown?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onClick?: () => void;
+  onToggleExpanded?: () => void;
+  onOpenSubtask?: (subtask: Task) => void;
+}
+
+function TaskCard({
+  task,
+  labelsById,
+  meta,
+  ghost = false,
+  dragging = false,
+  expanded = false,
+  cardRef,
+  onPointerDown,
+  onClick,
+  onToggleExpanded,
+  onOpenSubtask,
+}: TaskCardProps) {
+  const labels = task.labelIds
+    .map((labelId) => labelsById.get(labelId))
+    .filter((label): label is Label => label !== undefined);
+  return (
+    <div
+      ref={cardRef}
+      data-task-key={task.key}
+      onPointerDown={onPointerDown}
+      onClick={onClick}
+      className={cn(
+        "shrink-0 rounded-lg border border-border bg-card px-2.5 py-2 shadow-2xs select-none",
+        ghost
+          ? "rotate-2 shadow-md"
+          : "cursor-pointer touch-none hover:border-input",
+        dragging && "opacity-40",
+      )}
+    >
+      <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
+        <span className="tabular-nums">{task.key}</span>
+        <WorkingAgentsChip threads={meta.workingThreads} />
+      </div>
+      <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
+        {task.title}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <PriorityIcon priority={task.priority} />
+        {labels.map((label) => (
+          <span
+            key={label.id}
+            className="flex items-center gap-1 rounded-md border border-border px-1.5 text-2xs text-muted-foreground"
+          >
+            <span
+              aria-hidden
+              className="size-1.5 rounded-full"
+              style={{ backgroundColor: label.color }}
+            />
+            {label.name}
+          </span>
+        ))}
+        {meta.subTotal > 0 && !ghost ? (
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-label={`${expanded ? "Hide" : "Show"} ${meta.subTotal} sub-tasks`}
+            className="flex items-center gap-0.5 rounded-sm text-2xs text-muted-foreground hover:text-foreground"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleExpanded?.();
+            }}
+          >
+            <Icon
+              name="ChevronRight"
+              className={cn(
+                "size-3 transition-transform",
+                expanded && "rotate-90",
+              )}
+            />
+            <Icon name="GitBranch" className="size-3" />
+            {meta.subDone}/{meta.subTotal}
+          </button>
+        ) : meta.subTotal > 0 ? (
+          <span className="flex items-center gap-0.5 text-2xs text-muted-foreground">
+            <Icon name="GitBranch" className="size-3" />
+            {meta.subDone}/{meta.subTotal}
+          </span>
+        ) : null}
+        {meta.attachmentCount > 0 ? (
+          <Icon
+            name="Paperclip"
+            className="size-3 text-muted-foreground"
+            aria-label={`${meta.attachmentCount} attachments`}
+          />
+        ) : null}
+      </div>
+      {expanded && meta.subtasks.length > 0 ? (
+        <div className="mt-2 border-t border-border-hairline pt-1">
+          {meta.subtasks.map((subtask) => (
+            <button
+              key={subtask.id}
+              type="button"
+              title={STATUS_LABELS[subtask.status]}
+              className="flex min-h-7 w-full items-center gap-1.5 rounded px-0.5 text-left text-xs hover:bg-state-hover"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenSubtask?.(subtask);
+              }}
+            >
+              <StatusIcon status={subtask.status} />
+              <span className="shrink-0 text-2xs tabular-nums text-muted-foreground">
+                {subtask.key}
+              </span>
+              <span className="min-w-0 truncate">{subtask.title}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BoardSkeleton() {
+  return (
+    <div className="flex h-full items-start gap-3 overflow-x-auto p-4">
+      {BOARD_STATUSES.map((status) => (
+        <div
+          key={status}
+          className="flex w-[230px] shrink-0 flex-col gap-2 p-1"
+        >
+          <Skeleton className="h-5 w-24" />
+          <Skeleton className="h-20 w-full rounded-lg" />
+          <Skeleton className="h-20 w-full rounded-lg" />
+          <Skeleton className="h-14 w-full rounded-lg" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export interface BoardViewProps {
+  projectId: string;
+}
+
+export function BoardView({ projectId }: BoardViewProps) {
+  const rpc = useTasksRpc();
+  const navigation = useTasksNavigation();
+  const board = useTasksQuery(
+    (queryRpc) => fetchBoard(queryRpc, projectId),
+    ["tasks:changed", "projects:changed", "threads:changed"],
+    [projectId],
+  );
+
+  // Local column state renders instantly on drop; realtime refetches replace
+  // it with the server's authoritative fractional-position order.
+  const [columns, setColumns] = useState<ColumnMap | undefined>(undefined);
+  useEffect(() => {
+    setColumns(undefined);
+  }, [projectId]);
+  useEffect(() => {
+    if (board.data) setColumns(groupColumns(board.data.tasks));
+  }, [board.data]);
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
+
+  const [drag, setDrag] = useState<DragState | null>(null);
+  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [quickAddStatus, setQuickAddStatus] = useState<TaskStatus | null>(null);
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const columnRefs = useRef(new Map<TaskStatus, HTMLDivElement>());
+  const cardRefs = useRef(new Map<string, HTMLDivElement>());
+  const suppressClickRef = useRef(false);
+  const dragCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(() => () => dragCleanupRef.current?.(), []);
+
+  useEffect(() => {
+    setExpandedTaskIds(new Set());
+  }, [projectId]);
+
+  const findDropTarget = (
+    x: number,
+    y: number,
+    draggedTaskId: string,
+  ): { status: TaskStatus; index: number } | null => {
+    const current = columnsRef.current;
+    if (!current) return null;
+    // Each column's drop zone is its full-height strip of the board, so a
+    // pointer below a short column's last card still targets that column.
+    const boardRect = boardRef.current?.getBoundingClientRect();
+    if (
+      boardRect &&
+      (y < boardRect.top - 24 ||
+        y > boardRect.bottom + 24 ||
+        x < boardRect.left ||
+        x > boardRect.right)
+    ) {
+      return null;
+    }
+    for (const status of visibleBoardStatuses(current)) {
+      const columnElement = columnRefs.current.get(status);
+      if (!columnElement) continue;
+      const rect = columnElement.getBoundingClientRect();
+      if (x < rect.left - 6 || x > rect.right + 6) continue;
+      const centers = current[status]
+        .filter((task) => task.id !== draggedTaskId)
+        .map((task) => {
+          const cardElement = cardRefs.current.get(task.id);
+          if (!cardElement) return Number.NEGATIVE_INFINITY;
+          const cardRect = cardElement.getBoundingClientRect();
+          return cardRect.top + cardRect.height / 2;
+        });
+      return { status, index: dropIndexForPointer(centers, y) };
+    }
+    return null;
+  };
+
+  const commitDrop = (
+    taskId: string,
+    toStatus: TaskStatus,
+    dropIndex: number,
+  ) => {
+    const current = columnsRef.current;
+    if (!current) return;
+    const neighbors = dropNeighborsForIndex(
+      current[toStatus].map((task) => task.id),
+      taskId,
+      dropIndex,
+    );
+    setColumns(applyBoardMove(current, taskId, toStatus, dropIndex));
+    void rpc
+      .call("boardMove", {
+        taskId,
+        status: toStatus,
+        beforeTaskId: neighbors.beforeTaskId,
+        afterTaskId: neighbors.afterTaskId,
+        authorName: "You",
+      })
+      .then(
+        (result) => {
+          if (!result.ok) board.refresh();
+        },
+        () => board.refresh(),
+      );
+  };
+
+  const handleCardPointerDown = (
+    event: ReactPointerEvent<HTMLDivElement>,
+    task: Task,
+  ) => {
+    if (event.button !== 0 || dragCleanupRef.current) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const start = {
+      x: event.clientX,
+      y: event.clientY,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      width: rect.width,
+    };
+    let active = false;
+
+    const updateDrag = (moveEvent: PointerEvent) => {
+      const target = findDropTarget(
+        moveEvent.clientX,
+        moveEvent.clientY,
+        task.id,
+      );
+      setDrag({
+        taskId: task.id,
+        x: moveEvent.clientX,
+        y: moveEvent.clientY,
+        offsetX: start.offsetX,
+        offsetY: start.offsetY,
+        width: start.width,
+        overStatus: target?.status ?? null,
+        dropIndex: target?.index ?? 0,
+      });
+    };
+
+    const onMove = (moveEvent: PointerEvent) => {
+      if (!active) {
+        const distance = Math.hypot(
+          moveEvent.clientX - start.x,
+          moveEvent.clientY - start.y,
+        );
+        if (distance < DRAG_THRESHOLD_PX) return;
+        active = true;
+      }
+      moveEvent.preventDefault();
+      updateDrag(moveEvent);
+    };
+    const finish = (upEvent: PointerEvent | null) => {
+      dragCleanupRef.current?.();
+      dragCleanupRef.current = null;
+      if (!active) return;
+      if (upEvent) {
+        const target = findDropTarget(
+          upEvent.clientX,
+          upEvent.clientY,
+          task.id,
+        );
+        if (target) commitDrop(task.id, target.status, target.index);
+      }
+      setDrag(null);
+      // The click event fires right after pointerup; swallow that one only.
+      suppressClickRef.current = true;
+      setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    };
+    const onUp = (upEvent: PointerEvent) => finish(upEvent);
+    const onCancel = () => finish(null);
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    dragCleanupRef.current = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+    };
+  };
+
+  const openTask = (task: Task) => {
+    if (suppressClickRef.current) return;
+    navigation.go({
+      kind: "task",
+      taskKey: task.key,
+      projectId: task.projectId,
+    });
+  };
+
+  const toggleTaskExpanded = (taskId: string) => {
+    setExpandedTaskIds((current) => {
+      const next = new Set(current);
+      if (next.has(taskId)) next.delete(taskId);
+      else next.add(taskId);
+      return next;
+    });
+  };
+
+  if (columns === undefined) {
+    if (board.error) {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-sm text-muted-foreground">
+          <p>Failed to load the board: {board.error}</p>
+          <Button variant="outline" size="sm" onClick={board.refresh}>
+            Retry
+          </Button>
+        </div>
+      );
+    }
+    return <BoardSkeleton />;
+  }
+
+  const labelsById = board.data?.labelsById ?? new Map<string, Label>();
+  const metaByTaskId =
+    board.data?.metaByTaskId ?? new Map<string, BoardCardMeta>();
+  const ghostTask = drag
+    ? Object.values(columns)
+        .flat()
+        .find((task) => task.id === drag.taskId)
+    : undefined;
+
+  const renderColumn = (status: TaskStatus) => {
+    const cards = columns[status];
+    const isDragOver = drag !== null && drag.overStatus === status;
+    // The dragged card stays in place (dimmed), so the insertion indicator is
+    // positioned among the remaining cards.
+    const remaining = drag
+      ? cards.filter((task) => task.id !== drag.taskId)
+      : cards;
+    const indicatorBeforeTaskId = isDragOver
+      ? (remaining[drag.dropIndex]?.id ?? null)
+      : undefined;
+    const indicator = (
+      <div
+        key="drop-indicator"
+        className="h-0.5 shrink-0 rounded-full bg-primary"
+      />
+    );
+    const children: ReactNode[] = [];
+    for (const task of cards) {
+      if (task.id === indicatorBeforeTaskId) children.push(indicator);
+      children.push(
+        <TaskCard
+          key={task.id}
+          task={task}
+          labelsById={labelsById}
+          meta={metaByTaskId.get(task.id) ?? EMPTY_META}
+          dragging={drag?.taskId === task.id}
+          expanded={expandedTaskIds.has(task.id)}
+          cardRef={(element) => {
+            if (element) cardRefs.current.set(task.id, element);
+            else cardRefs.current.delete(task.id);
+          }}
+          onPointerDown={(event) => handleCardPointerDown(event, task)}
+          onClick={() => openTask(task)}
+          onToggleExpanded={() => toggleTaskExpanded(task.id)}
+          onOpenSubtask={openTask}
+        />,
+      );
+    }
+    if (indicatorBeforeTaskId === null) children.push(indicator);
+
+    return (
+      <div key={status} className="flex max-h-full w-[230px] shrink-0 flex-col">
+        <div className="flex items-center gap-1.5 px-1 pb-2 text-sm font-semibold">
+          <StatusIcon status={status} />
+          <span>{STATUS_LABELS[status]}</span>
+          <span className="font-normal text-muted-foreground">
+            {cards.length}
+          </span>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="ml-auto size-6 text-muted-foreground"
+            aria-label={`New ${STATUS_LABELS[status]} task`}
+            onClick={() => setQuickAddStatus(status)}
+          >
+            <Icon name="Plus" className="size-3.5" />
+          </Button>
+        </div>
+        <div
+          ref={(element) => {
+            if (element) columnRefs.current.set(status, element);
+            else columnRefs.current.delete(status);
+          }}
+          data-board-column={status}
+          className={cn(
+            "flex min-h-16 flex-col gap-2 overflow-y-auto rounded-lg p-1",
+            isDragOver &&
+              "bg-surface-selected outline-2 outline-dashed outline-input",
+          )}
+        >
+          {children}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div
+      ref={boardRef}
+      className={cn(
+        "flex h-full items-start gap-3 overflow-x-auto p-4",
+        drag !== null && "cursor-grabbing",
+      )}
+    >
+      {visibleBoardStatuses(columns).map(renderColumn)}
+      {drag && ghostTask ? (
+        <div
+          className="pointer-events-none fixed z-50"
+          style={{
+            left: drag.x - drag.offsetX,
+            top: drag.y - drag.offsetY,
+            width: drag.width,
+          }}
+        >
+          <TaskCard
+            task={ghostTask}
+            labelsById={labelsById}
+            meta={metaByTaskId.get(ghostTask.id) ?? EMPTY_META}
+            ghost
+          />
+        </div>
+      ) : null}
+      <NewTaskDialog
+        open={quickAddStatus !== null}
+        onOpenChange={(open) => {
+          if (!open) setQuickAddStatus(null);
+        }}
+        projectId={projectId}
+        defaultStatus={quickAddStatus ?? undefined}
+      />
+    </div>
+  );
+}
