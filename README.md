@@ -176,6 +176,10 @@ also read-only and does not participate in autonomous execution.
 
 ## Project workflows
 
+The proposed executable, declarative workflow model is documented in
+[Declarative workflow design](docs/declarative-workflows.md). It is distinct
+from the currently implemented Markdown policies described below.
+
 Reusable project workflows are Markdown policies for dispatched agents. Create
 them under **Tasks → Manage → Workflows**, then assign the same workflow to one
 or more Tasks projects. The selected Markdown is appended to both manual
