@@ -48,6 +48,7 @@ export const INVALIDATION_CHANNELS = [
   "projects:changed",
   "comments:changed",
   "threads:changed",
+  "workflow:changed",
 ] as const;
 
 export type InvalidationChannel = (typeof INVALIDATION_CHANNELS)[number];
@@ -70,6 +71,7 @@ export function useInvalidation(
   useRealtime("projects:changed", () => fire("projects:changed"));
   useRealtime("comments:changed", () => fire("comments:changed"));
   useRealtime("threads:changed", () => fire("threads:changed"));
+  useRealtime("workflow:changed", () => fire("workflow:changed"));
 }
 
 export interface TasksQuery<T> {

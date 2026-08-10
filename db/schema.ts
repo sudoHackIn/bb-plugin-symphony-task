@@ -318,6 +318,50 @@ const MIGRATIONS = [
     CREATE INDEX execution_runs_thread
       ON execution_runs(thread_id) WHERE thread_id IS NOT NULL;
   `,
+  `
+    CREATE TABLE workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      workflow_revision TEXT NOT NULL,
+      tracker TEXT NOT NULL CHECK (tracker IN ('beads')),
+      project_id TEXT NOT NULL,
+      work_item_id TEXT NOT NULL,
+      work_item_key TEXT NOT NULL,
+      work_item_title TEXT NOT NULL,
+      environment_id TEXT,
+      stage TEXT NOT NULL CHECK (stage IN (
+        'PROPOSAL_DRAFTING', 'PROPOSAL_REVIEW', 'SPEC_DRAFTING', 'SPEC_REVIEW',
+        'DESIGN_DRAFTING', 'DESIGN_REVIEW', 'TASKS_DRAFTING', 'TASKS_REVIEW',
+        'IMPLEMENTING', 'AGENT_REVIEW', 'FINAL_REVIEW', 'DONE'
+      )),
+      status TEXT NOT NULL CHECK (status IN (
+        'running', 'waiting_agent', 'waiting_human', 'completed', 'failed'
+      )),
+      state_json TEXT NOT NULL,
+      version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
+    CREATE UNIQUE INDEX workflow_runs_one_active_item
+      ON workflow_runs(tracker, project_id, work_item_id)
+      WHERE status NOT IN ('completed', 'failed');
+    CREATE INDEX workflow_runs_recovery
+      ON workflow_runs(status, updated_at);
+
+    CREATE TABLE workflow_events (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL CHECK (sequence >= 1),
+      type TEXT NOT NULL,
+      data_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (run_id, sequence)
+    );
+    CREATE INDEX workflow_events_run_sequence
+      ON workflow_events(run_id, sequence);
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

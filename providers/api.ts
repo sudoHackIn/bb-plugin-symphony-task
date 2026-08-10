@@ -34,6 +34,7 @@ import {
   sourceStatus,
   syntheticUlid,
 } from "./runtime.js";
+import type { WorkflowBeadsBridge } from "../workflows/index.js";
 
 const TARGETS_PREFIX = "task-targets:";
 const EXTERNAL_THREADS_PREFIX = "external-task-threads:";
@@ -145,7 +146,7 @@ export function registerProviderAwareTasksApi(
   bb: BbPluginApi,
   store: TasksApiStore,
   settings: SettingsHandle,
-): PluginRpcHandlers<typeof tasksRpcContract> {
+): PluginRpcHandlers<typeof tasksRpcContract> & { workflowBeads: WorkflowBeadsBridge } {
   const local = registerHandlers(bb, store);
   const externalTaskCounts = new Map<string, number>();
   const REVISION_CHECK_INTERVAL_MS = 5_000;
@@ -996,5 +997,22 @@ export function registerProviderAwareTasksApi(
     },
   });
 
-  return handlers;
+  const workflowBeads: WorkflowBeadsBridge = {
+    async getBead(taskId, projectId) {
+      const match = await findExternalInProject(projectId, (task) => task.id === taskId);
+      if (!match || match.source.id !== "beads") throw new Error("OpenSpec workflows can only start for a Beads task");
+      if (match.readOnly) throw new Error("This Beads source is read-only");
+      const targets = await executionTargets(taskId, projectId);
+      if (targets.projectIds.length !== 1) throw new Error("Choose exactly one execution target before starting an OpenSpec workflow");
+      return { id: match.task.id, key: match.task.key, title: match.task.title, description: match.task.description, targetProjectId: targets.projectIds[0]! };
+    },
+    async setInProgress(taskId, projectId) {
+      const match = await findExternalInProject(projectId, (task) => task.id === taskId);
+      if (!match || match.source.id !== "beads") throw new Error("Beads task not found");
+      await match.source.update(match.sourceTask.id, { nativeStatus: "in_progress" });
+      invalidateExternalTasks(projectId);
+      bb.realtime.publish("tasks:changed", { taskId, projectId });
+    },
+  };
+  return Object.assign(handlers, { workflowBeads });
 }

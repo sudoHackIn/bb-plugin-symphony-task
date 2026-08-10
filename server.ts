@@ -9,6 +9,7 @@ import { registerLifecycle } from "./lifecycle";
 import { registerMentions } from "./mentions";
 import { registerProviderAwareTasksApi } from "./providers/api";
 import { registerExecution } from "./execution/index";
+import { registerOpenSpecWorkflow } from "./workflows/index";
 
 export const TASKS_PLUGIN_NAME = "Symphony Task";
 export const TASKS_PLUGIN_VERSION = "0.2.0";
@@ -55,6 +56,7 @@ export default async function plugin(bb: BbPluginApi) {
 
   const store = createStore(bb);
   const tasksDomain = registerProviderAwareTasksApi(bb, store, settings);
+  registerOpenSpecWorkflow(bb, store, tasksDomain.workflowBeads);
   registerAttachments(bb, store.tasks);
   registerTasksCli(bb, store, statusPayload(), tasksDomain);
   registerDelegation(bb, store);

@@ -28,6 +28,7 @@ import {
 import { ThreadsSection } from "./threads.js";
 import { BeadsLinks } from "./beads-links.js";
 import { DetailToasts, useDetailToasts } from "./toast.js";
+import { WorkflowPanel } from "./workflow.js";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -556,6 +557,8 @@ function TaskDetail({
               onError={(message) => push("error", message)}
             />
           ) : null}
+
+          <WorkflowPanel task={task} presets={presets.data ?? []} onError={(message) => push("error", message)} />
 
           <SubTasksSection
             ref={subtasksRef}
