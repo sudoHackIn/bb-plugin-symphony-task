@@ -342,7 +342,9 @@ export function registerExecution(
             ? "Local tracker supports transactional claims."
             : source === "automatic"
               ? "Choose Local Tasks explicitly before enabling autonomous execution."
-              : `${source === "jira" ? "Jira" : "Beads"} execution claims are not implemented yet.`,
+              : source === "beads"
+                ? "Autonomous execution is unavailable for Beads. Start an OpenSpec workflow from Dispatch."
+                : "Jira execution claims are not implemented yet.",
           policy:
             policies.get(project.id) ??
             executions.getProjectPolicy(project.id),
