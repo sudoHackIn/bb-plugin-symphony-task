@@ -73,7 +73,13 @@ export const taskProvidersRpcContract = defineRpcContract({
   },
   dispatchTask: {
     input: z
-      .object({ taskId: z.string(), presetId: z.string() })
+      .object({
+        taskId: z.string(),
+        presetId: z.string(),
+        // Omitted callers retain the preset instructions. Supplying an empty
+        // string deliberately removes them for this dispatch only.
+        instructions: z.string().optional(),
+      })
       .strict(),
     output: z.object({ threadIds: z.array(z.string().startsWith("thr_")).min(1) }).strict(),
   },

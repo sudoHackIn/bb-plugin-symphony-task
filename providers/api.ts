@@ -939,7 +939,9 @@ export function registerProviderAwareTasksApi(
         task.description.trim() || "No description provided.",
         "## Task source",
         sourceName,
-        preset.instructions.trim() ? `## Preset instructions\n\n${preset.instructions.trim()}` : "",
+        (input.instructions ?? preset.instructions).trim()
+          ? `## Preset instructions\n\n${(input.instructions ?? preset.instructions).trim()}`
+          : "",
       ]
         .filter(Boolean)
         .join("\n\n");

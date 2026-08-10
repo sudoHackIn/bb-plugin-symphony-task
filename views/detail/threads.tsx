@@ -19,6 +19,14 @@ import {
 import { useTasksRpc } from "../../shell/data.js";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -26,6 +34,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
+import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "../../components/confirm-dialog.js";
 
@@ -197,9 +206,9 @@ export interface DispatchControlProps {
  * The single dispatch control for a task — rendered in the properties rail
  * on wide layouts and in the inline property row when the rail is hidden.
  * GitHub-merge-style split button around the dispatch RPC: the primary
- * segment dispatches immediately with the last-used preset (persisted in
- * localStorage; first preset alphabetically as the fallback), the chevron
- * segment opens the preset menu, which also updates the remembered choice.
+ * segment opens a per-dispatch prompt editor for the last-used preset
+ * (persisted in localStorage; first preset alphabetically as the fallback),
+ * and the chevron selects a different preset before opening that editor.
  * The label is just the preset name — the dropdown's "Dispatch with preset"
  * header carries the verb. With zero presets it collapses to an
  * "Add a preset…" button opening the preset dialog in create mode.
@@ -216,13 +225,21 @@ export function DispatchControl({
   const tasksRpc = useTasksRpc();
   const [dispatching, setDispatching] = useState(false);
   const [lastPresetId, setLastPresetId] = useState(loadLastPresetId);
+  const [pendingPreset, setPendingPreset] = useState<Preset | null>(null);
+  const [instructions, setInstructions] = useState("");
   // Keyed remount resets the create dialog's draft per open.
   const [createDialogKey, setCreateDialogKey] = useState<number | null>(null);
 
-  const dispatch = async (presetId: string) => {
+  const dispatch = async () => {
+    if (!pendingPreset) return;
     setDispatching(true);
     try {
-      await rpc.call("dispatchTask", { taskId, presetId });
+      await rpc.call("dispatchTask", {
+        taskId,
+        presetId: pendingPreset.id,
+        instructions,
+      });
+      setPendingPreset(null);
     } catch (error) {
       onError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -233,7 +250,8 @@ export function DispatchControl({
   const pickPreset = (preset: Preset) => {
     setLastPresetId(preset.id);
     storeLastPresetId(preset.id);
-    void dispatch(preset.id);
+    setInstructions(preset.instructions);
+    setPendingPreset(preset);
   };
 
   // bg-primary (not the default bg-foreground): custom palettes like Nord
@@ -276,10 +294,7 @@ export function DispatchControl({
 
   return (
     <>
-      <div
-        className={cn("flex min-w-0", className)}
-        title={blockedReason}
-      >
+      <div className={cn("flex min-w-0", className)} title={blockedReason}>
         <Button
           size="sm"
           disabled={dispatching || !current || blockedReason !== undefined}
@@ -334,6 +349,42 @@ export function DispatchControl({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
+      <Dialog
+        open={pendingPreset !== null}
+        onOpenChange={(open) => {
+          if (!open && !dispatching) setPendingPreset(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Dispatch with {pendingPreset?.name}</DialogTitle>
+            <DialogDescription>
+              These instructions replace the preset instructions for this dispatch only.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            autoFocus
+            value={instructions}
+            onChange={(event) => setInstructions(event.target.value)}
+            placeholder="Optional instructions for this agent"
+            className="min-h-40 resize-y font-mono text-xs leading-5"
+            spellCheck={false}
+            disabled={dispatching}
+          />
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              disabled={dispatching}
+              onClick={() => setPendingPreset(null)}
+            >
+              Cancel
+            </Button>
+            <Button disabled={dispatching} onClick={() => void dispatch()}>
+              {dispatching ? "Dispatching…" : "Dispatch"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
