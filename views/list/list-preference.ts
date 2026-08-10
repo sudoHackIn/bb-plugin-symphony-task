@@ -129,6 +129,7 @@ export function sanitizeListPreference(raw: unknown): ListPreference {
       statuses: uniqueValidStatuses(filtersRaw.statuses),
       priorities: uniqueValidPriorities(filtersRaw.priorities),
       labelNames: uniqueLabelNames(filtersRaw.labelNames),
+      waitingHuman: filtersRaw.waitingHuman === true,
     },
     sort: sanitizeSort(record.sort),
   };

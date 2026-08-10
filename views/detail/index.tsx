@@ -558,7 +558,7 @@ function TaskDetail({
             />
           ) : null}
 
-          <WorkflowPanel task={task} presets={presets.data ?? []} onError={(message) => push("error", message)} />
+          <WorkflowPanel task={task} onError={(message) => push("error", message)} />
 
           <SubTasksSection
             ref={subtasksRef}

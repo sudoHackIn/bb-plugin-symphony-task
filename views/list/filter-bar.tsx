@@ -121,19 +121,23 @@ export interface ListFilterState {
   statuses: TaskStatus[];
   priorities: TaskPriority[];
   labelNames: string[];
+  /** Durable workflows paused at an intermediate human approval gate. */
+  waitingHuman: boolean;
 }
 
 export const EMPTY_FILTERS: ListFilterState = {
   statuses: [],
   priorities: [],
   labelNames: [],
+  waitingHuman: false,
 };
 
 export function hasActiveFilters(filters: ListFilterState): boolean {
   return (
     filters.statuses.length > 0 ||
     filters.priorities.length > 0 ||
-    filters.labelNames.length > 0
+    filters.labelNames.length > 0 ||
+    filters.waitingHuman
   );
 }
 
@@ -283,6 +287,22 @@ export function ListFilterBar({
               ))}
           </FilterChip>
         ) : null}
+        <button
+          type="button"
+          aria-pressed={filters.waitingHuman}
+          onClick={() =>
+            onChange({ ...filters, waitingHuman: !filters.waitingHuman })
+          }
+          className={cn(
+            "flex h-6 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs max-md:pointer-coarse:h-8",
+            filters.waitingHuman
+              ? "border-warning/50 bg-warning/10 text-foreground"
+              : "border-dashed border-border text-muted-foreground hover:border-input hover:text-foreground",
+          )}
+        >
+          <Icon name="Clock" className="size-3" />
+          Waiting for human
+        </button>
         {hasActiveFilters(filters) ? (
           <button
             type="button"

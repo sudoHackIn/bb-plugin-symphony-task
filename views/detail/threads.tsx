@@ -3,6 +3,7 @@ import { useBbNavigate, useRpc } from "@bb/plugin-sdk/app";
 import type { TaskProvidersRpcContract } from "../../providers/contract.js";
 import type {
   Preset,
+  Task,
   TaskPullRequest,
   TaskThread,
 } from "../../shared/contract.js";
@@ -17,6 +18,7 @@ import {
   savePresetDraft,
 } from "../manage/preset-dialog.js";
 import { useTasksRpc } from "../../shell/data.js";
+import type { WorkflowRpcContract } from "../../workflows/contract.js";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -194,7 +196,7 @@ function storeLastPresetId(presetId: string): void {
 }
 
 export interface DispatchControlProps {
-  taskId: string;
+  task: Task;
   presets: Preset[] | undefined;
   onError: (message: string) => void;
   blockedReason?: string;
@@ -214,7 +216,7 @@ export interface DispatchControlProps {
  * "Add a preset…" button opening the preset dialog in create mode.
  */
 export function DispatchControl({
-  taskId,
+  task,
   presets,
   onError,
   blockedReason,
@@ -222,6 +224,7 @@ export function DispatchControl({
   className,
 }: DispatchControlProps) {
   const rpc = useRpc<TaskProvidersRpcContract>();
+  const workflowRpc = useRpc<WorkflowRpcContract>();
   const tasksRpc = useTasksRpc();
   const [dispatching, setDispatching] = useState(false);
   const [lastPresetId, setLastPresetId] = useState(loadLastPresetId);
@@ -235,7 +238,7 @@ export function DispatchControl({
     setDispatching(true);
     try {
       await rpc.call("dispatchTask", {
-        taskId,
+        taskId: task.id,
         presetId: pendingPreset.id,
         instructions,
       });
@@ -245,6 +248,12 @@ export function DispatchControl({
     } finally {
       setDispatching(false);
     }
+  };
+  const startWorkflow = async (preset: Preset) => {
+    setDispatching(true);
+    try { await workflowRpc.call("startOpenSpecWorkflow", { taskId: task.id, projectId: task.projectId, presetId: preset.id }); }
+    catch (error) { onError(error instanceof Error ? error.message : String(error)); }
+    finally { setDispatching(false); }
   };
 
   const pickPreset = (preset: Preset) => {
@@ -346,6 +355,7 @@ export function DispatchControl({
                 ) : null}
               </DropdownMenuItem>
             ))}
+            {task.sourceId === "beads" ? <><DropdownMenuLabel>Workflow</DropdownMenuLabel><DropdownMenuItem onSelect={() => { if (current) void startWorkflow(current); }}>Start OpenSpec workflow</DropdownMenuItem></> : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -410,7 +420,20 @@ export function ThreadsSection({
   onThreadsChanged,
   onError,
 }: ThreadsSectionProps) {
-  const activeCount = threads.filter(isActiveThread).length;
+  const [threadHistoryOpen, setThreadHistoryOpen] = useState(false);
+  const [workflowHistoryOpen, setWorkflowHistoryOpen] = useState(false);
+  const activeThreads = threads.filter(isActiveThread);
+  // Workflow threads stay attached deliberately: each OpenSpec stage is an
+  // auditable artifact of the run. Keep them apart from ordinary historical
+  // dispatches so the currently running agent is always the first thing seen.
+  const workflowHistory = threads.filter(
+    (thread) =>
+      !isActiveThread(thread) && thread.presetName.startsWith("OpenSpec ·"),
+  );
+  const threadHistory = threads.filter(
+    (thread) =>
+      !isActiveThread(thread) && !thread.presetName.startsWith("OpenSpec ·"),
+  );
   const pullRequestByThread = new Map<string, TaskPullRequest>();
   for (const pullRequest of pullRequests ?? []) {
     for (const threadId of pullRequest.threadIds) {
@@ -418,26 +441,29 @@ export function ThreadsSection({
     }
   }
   const unavailable = new Set(unavailableThreadIds);
+  const renderCard = (thread: TaskThread) => (
+    <ThreadCard
+      key={thread.id}
+      taskId={taskId}
+      thread={thread}
+      pullRequest={pullRequestByThread.get(thread.threadId)}
+      pullRequestUnavailable={unavailable.has(thread.threadId)}
+      onDetached={onThreadsChanged}
+      onError={onError}
+    />
+  );
 
   return (
     <section>
       <div className="mb-2 flex items-center gap-2 pt-1.5 text-xs font-semibold text-muted-foreground">
-        Agent threads
-        {activeCount > 0 ? (
-          <span className="font-normal">{activeCount} working now</span>
+        Active agents
+        {activeThreads.length > 0 ? (
+          <span className="font-normal">{activeThreads.length} working now</span>
         ) : null}
       </div>
-      {threads.map((thread) => (
-        <ThreadCard
-          key={thread.id}
-          taskId={taskId}
-          thread={thread}
-          pullRequest={pullRequestByThread.get(thread.threadId)}
-          pullRequestUnavailable={unavailable.has(thread.threadId)}
-          onDetached={onThreadsChanged}
-          onError={onError}
-        />
-      ))}
+      {activeThreads.length > 0 ? activeThreads.map(renderCard) : <p className="mb-3 text-xs text-muted-foreground">None active</p>}
+      {workflowHistory.length > 0 ? <div className="mt-4"><button type="button" aria-expanded={workflowHistoryOpen} aria-controls={`workflow-history-${taskId}`} onClick={() => setWorkflowHistoryOpen((open) => !open)} className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"><Icon name="ChevronRight" className={cn("size-3.5 transition-transform", workflowHistoryOpen && "rotate-90")} />Workflow history <span className="font-normal">{workflowHistory.length}</span></button>{workflowHistoryOpen ? <div id={`workflow-history-${taskId}`}>{workflowHistory.map(renderCard)}</div> : null}</div> : null}
+      {threadHistory.length > 0 ? <div className="mt-4"><button type="button" aria-expanded={threadHistoryOpen} aria-controls={`thread-history-${taskId}`} onClick={() => setThreadHistoryOpen((open) => !open)} className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-muted-foreground hover:text-foreground"><Icon name="ChevronRight" className={cn("size-3.5 transition-transform", threadHistoryOpen && "rotate-90")} />Thread history <span className="font-normal">{threadHistory.length}</span></button>{threadHistoryOpen ? <div id={`thread-history-${taskId}`}>{threadHistory.map(renderCard)}</div> : null}</div> : null}
     </section>
   );
 }

@@ -7,7 +7,7 @@ import { DetailToasts, useDetailToasts } from "../detail/toast.js";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useLabels, useListTasks, useTaskListMeta } from "./data.js";
+import { useLabels, useListTasks, useTaskListMeta, useWorkflowSummaries } from "./data.js";
 import {
   EMPTY_FILTERS,
   hasActiveFilters,
@@ -136,6 +136,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     labelIds: null,
   });
   const meta = useTaskListMeta(tasksQuery.data);
+  const workflows = useWorkflowSummaries(tasksQuery.data);
   const edits = useListTaskEdits(tasksQuery.data, (message) =>
     push("error", message),
   );
@@ -173,13 +174,17 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
   // instead of waiting for the server refetch.
   const displayTasks = useMemo(() => {
     if (tasksQuery.data === undefined) return undefined;
+    if (filters.waitingHuman && workflows.data === undefined) return undefined;
     return editedTasks(tasksQuery.data, edits.entries).filter((task) =>
       matchesFilters(
         task,
         filters.statuses,
         filters.priorities,
         [],
-      ) && matchesLabelNames(task, filters.labelNames, labelsById),
+      ) &&
+      matchesLabelNames(task, filters.labelNames, labelsById) &&
+      (!filters.waitingHuman ||
+        workflows.data?.get(task.id)?.status === "waiting_human"),
     );
   }, [
     tasksQuery.data,
@@ -187,7 +192,9 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
     filters.statuses,
     filters.priorities,
     filters.labelNames,
+    filters.waitingHuman,
     labelsById,
+    workflows.data,
   ]);
   const groups = useMemo(
     () => groupTasksByStatus(sortTasks(displayTasks ?? [], sort)),
@@ -299,6 +306,7 @@ export function ListView({ projectId, activeOnly = false }: ListViewProps) {
             key={task.id}
             task={task}
             meta={meta.data?.get(task.id)}
+            workflowStatus={workflows.data?.get(task.id)?.status}
             project={projectsById.get(task.projectId)}
             showProject={showProject}
             labelsById={labelsById}

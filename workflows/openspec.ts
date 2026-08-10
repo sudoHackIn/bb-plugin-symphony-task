@@ -46,6 +46,9 @@ export interface OpenSpecState {
   lastHumanComment: string | null;
   pendingReview: ArtifactReady | null;
   presetId: string | null;
+  implementation: ArtifactReady | null;
+  agentReview: { passed: boolean; findings: string[]; evidence: string[] } | null;
+  workflowMarkdown: string;
 }
 
 export interface OpenSpecSnapshot {
@@ -62,6 +65,9 @@ export function initialOpenSpecState(): OpenSpecState {
     lastHumanComment: null,
     pendingReview: null,
     presetId: null,
+    implementation: null,
+    agentReview: null,
+    workflowMarkdown: "",
   };
 }
 
@@ -75,22 +81,47 @@ export function draftArtifactName(stage: OpenSpecStage): OpenSpecArtifact["stage
   }
 }
 
-/** Pure reducer for the proposal gate; later stages deliberately remain typed. */
+export function reviewStageFor(artifact: OpenSpecArtifact["stage"]): OpenSpecStage {
+  const map: Record<OpenSpecArtifact["stage"], OpenSpecStage> = { proposal: "PROPOSAL_REVIEW", specs: "SPEC_REVIEW", design: "DESIGN_REVIEW", tasks: "TASKS_REVIEW" };
+  return map[artifact];
+}
+
+export function draftStageFor(artifact: OpenSpecArtifact["stage"]): OpenSpecStage {
+  const map: Record<OpenSpecArtifact["stage"], OpenSpecStage> = { proposal: "PROPOSAL_DRAFTING", specs: "SPEC_DRAFTING", design: "DESIGN_DRAFTING", tasks: "TASKS_DRAFTING" };
+  return map[artifact];
+}
+
+export function reviewArtifactName(stage: OpenSpecStage): OpenSpecArtifact["stage"] | null {
+  return ({ PROPOSAL_REVIEW: "proposal", SPEC_REVIEW: "specs", DESIGN_REVIEW: "design", TASKS_REVIEW: "tasks" } as Partial<Record<OpenSpecStage, OpenSpecArtifact["stage"]>>)[stage] ?? null;
+}
+
+export function downstreamArtifacts(artifact: OpenSpecArtifact["stage"]): OpenSpecArtifact["stage"][] {
+  const map: Record<OpenSpecArtifact["stage"], OpenSpecArtifact["stage"][]> = { proposal: ["specs", "design", "tasks"], specs: ["design", "tasks"], design: ["tasks"], tasks: [] };
+  return map[artifact];
+}
+
+/** Canonical fixed-graph reducer; Markdown policy cannot create transitions. */
 export function reduceOpenSpec(
   snapshot: OpenSpecSnapshot,
   event:
     | { type: "stage_started"; threadId: string }
     | { type: "artifact_ready"; artifact: ArtifactReady }
+    | { type: "agent_review"; passed: boolean; findings: string[]; evidence: string[] }
     | { type: "approved"; comment: string }
     | { type: "changes_requested"; comment: string },
 ): OpenSpecSnapshot {
   const state: OpenSpecState = structuredClone(snapshot.state);
   if (event.type === "stage_started") {
-    if (snapshot.stage !== "PROPOSAL_DRAFTING") throw new Error("stage cannot be started");
+    if ((!draftArtifactName(snapshot.stage) && snapshot.stage !== "IMPLEMENTING" && snapshot.stage !== "AGENT_REVIEW") || snapshot.status !== "running") throw new Error("stage cannot be started");
     state.activeThreadId = event.threadId;
     return { stage: snapshot.stage, status: "waiting_agent", state };
   }
   if (event.type === "artifact_ready") {
+    if (snapshot.stage === "IMPLEMENTING" && snapshot.status === "waiting_agent") {
+      state.implementation = event.artifact;
+      state.activeThreadId = null;
+      return { stage: "AGENT_REVIEW", status: "running", state };
+    }
     const artifactName = draftArtifactName(snapshot.stage);
     if (!artifactName || snapshot.status !== "waiting_agent") throw new Error("artifact is not expected");
     state.artifacts[artifactName] = {
@@ -101,21 +132,48 @@ export function reduceOpenSpec(
     };
     state.activeThreadId = null;
     state.pendingReview = event.artifact;
-    return { stage: "PROPOSAL_REVIEW", status: "waiting_human", state };
+    return { stage: reviewStageFor(artifactName), status: "waiting_human", state };
+  }
+  if (event.type === "agent_review") {
+    if (snapshot.stage !== "AGENT_REVIEW" || snapshot.status !== "waiting_agent") throw new Error("agent review is not expected");
+    state.activeThreadId = null;
+    state.agentReview = { passed: event.passed, findings: event.findings, evidence: event.evidence };
+    if (event.passed) {
+      state.pendingReview = state.implementation;
+      return { stage: "FINAL_REVIEW", status: "waiting_human", state };
+    }
+    state.attempts.implementation = (state.attempts.implementation ?? 1) + 1;
+    state.lastHumanComment = event.findings.join("\n");
+    return { stage: "IMPLEMENTING", status: "running", state };
   }
   if (event.type === "approved") {
-    if (snapshot.stage !== "PROPOSAL_REVIEW" || snapshot.status !== "waiting_human") throw new Error("approval is not expected");
-    const proposal = state.artifacts.proposal;
-    if (!proposal) throw new Error("proposal artifact is missing");
-    proposal.approvedDigest = proposal.digest;
+    if (snapshot.stage === "FINAL_REVIEW" && snapshot.status === "waiting_human") {
+      state.lastHumanComment = event.comment || null;
+      return { stage: "DONE", status: "completed", state };
+    }
+    const artifactName = reviewArtifactName(snapshot.stage);
+    if (!artifactName || snapshot.status !== "waiting_human") throw new Error("approval is not expected");
+    const artifact = state.artifacts[artifactName];
+    if (!artifact) throw new Error("review artifact is missing");
+    artifact.approvedDigest = artifact.digest;
     state.pendingReview = null;
     state.lastHumanComment = event.comment || null;
-    return { stage: "SPEC_DRAFTING", status: "running", state };
+    const next = ({ proposal: "SPEC_DRAFTING", specs: "DESIGN_DRAFTING", design: "TASKS_DRAFTING", tasks: "IMPLEMENTING" })[artifactName] as OpenSpecStage;
+    return { stage: next, status: "running", state };
   }
-  if (snapshot.stage !== "PROPOSAL_REVIEW" || snapshot.status !== "waiting_human") throw new Error("changes are not expected");
-  state.attempts.proposal = (state.attempts.proposal ?? 1) + 1;
-  delete state.artifacts.proposal;
+  const artifactName = reviewArtifactName(snapshot.stage);
+  if (snapshot.stage === "FINAL_REVIEW" && snapshot.status === "waiting_human") {
+    state.attempts.implementation = (state.attempts.implementation ?? 1) + 1;
+    state.lastHumanComment = event.comment;
+    state.pendingReview = null;
+    state.agentReview = null;
+    return { stage: "IMPLEMENTING", status: "running", state };
+  }
+  if (!artifactName || snapshot.status !== "waiting_human") throw new Error("changes are not expected");
+  state.attempts[artifactName] = (state.attempts[artifactName] ?? 1) + 1;
+  delete state.artifacts[artifactName];
+  for (const dependent of downstreamArtifacts(artifactName)) delete state.artifacts[dependent];
   state.pendingReview = null;
   state.lastHumanComment = event.comment;
-  return { stage: "PROPOSAL_DRAFTING", status: "running", state };
+  return { stage: draftStageFor(artifactName), status: "running", state };
 }

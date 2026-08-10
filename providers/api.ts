@@ -1013,6 +1013,39 @@ export function registerProviderAwareTasksApi(
       invalidateExternalTasks(projectId);
       bb.realtime.publish("tasks:changed", { taskId, projectId });
     },
+    async setDone(taskId, projectId) {
+      const match = await findExternalInProject(projectId, (task) => task.id === taskId);
+      if (!match || match.source.id !== "beads") throw new Error("Beads task not found");
+      await match.source.update(match.sourceTask.id, { nativeStatus: "closed" });
+      invalidateExternalTasks(projectId);
+      bb.realtime.publish("tasks:changed", { taskId, projectId });
+    },
+    async attachWorkflowThread(taskId, projectId, threadId, stage) {
+      const match = await findExternalInProject(projectId, (task) => task.id === taskId);
+      if (!match || match.source.id !== "beads") throw new Error("Beads task not found");
+      const thread = await bb.sdk.threads.get({ threadId });
+      const now = new Date().toISOString();
+      const records =
+        (await bb.storage.kv.get<ExternalThreadRecord[]>(externalThreadsKey(taskId))) ?? [];
+      const existing = records.find((record) => record.threadId === threadId);
+      const taskThread: ExternalThreadRecord = {
+        id: existing?.id ?? syntheticUlid(taskId, threadId),
+        taskId,
+        threadId,
+        presetName: `OpenSpec · ${stage.replaceAll("_", " ").toLowerCase()}`,
+        title: (thread.title ?? thread.titleFallback ?? `${match.task.key} · OpenSpec`).slice(0, 120),
+        liveStatus: thread.deletedAt !== null ? "completed" : liveStatus(thread.status),
+        attachedAt: existing?.attachedAt ?? now,
+        updatedAt: now,
+        targetProjectId: existing?.targetProjectId ?? thread.projectId,
+      };
+      await bb.storage.kv.set(externalThreadsKey(taskId), [
+        ...records.filter((record) => record.threadId !== threadId),
+        taskThread,
+      ]);
+      bb.realtime.publish("threads:changed", { taskId });
+      bb.realtime.publish("tasks:changed", { taskId, projectId });
+    },
   };
   return Object.assign(handlers, { workflowBeads });
 }

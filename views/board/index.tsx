@@ -36,6 +36,7 @@ import {
   type ListPreference,
 } from "../list/list-preference.js";
 import { matchesFilters } from "../list/optimistic.js";
+import { useWorkflowSummaries } from "../list/data.js";
 import { sortTasks, type TaskSort } from "../../shared/sort.js";
 import {
   applyBoardMove,
@@ -203,6 +204,7 @@ interface TaskCardProps {
   task: Task;
   labelsById: Map<string, Label>;
   meta: BoardCardMeta;
+  workflowStatus?: "running" | "waiting_agent" | "waiting_human" | "completed" | "failed";
   ghost?: boolean;
   dragging?: boolean;
   expanded?: boolean;
@@ -217,6 +219,7 @@ function TaskCard({
   task,
   labelsById,
   meta,
+  workflowStatus,
   ghost = false,
   dragging = false,
   expanded = false,
@@ -248,6 +251,15 @@ function TaskCard({
       <div className="flex items-center gap-1.5 text-2xs text-muted-foreground">
         <span className="tabular-nums">{task.key}</span>
         <WorkingAgentsChip threads={meta.workingThreads} />
+        {workflowStatus === "waiting_human" ? (
+          <span
+            title="OpenSpec workflow is waiting for human approval"
+            className="flex items-center gap-1 rounded-md border border-warning/50 bg-warning/10 px-1.5 py-0.5 text-2xs font-medium text-foreground"
+          >
+            <Icon name="Clock" className="size-3" />
+            Waiting for human
+          </span>
+        ) : null}
       </div>
       <div className="mt-1 line-clamp-2 text-sm leading-snug font-medium">
         {task.title}
@@ -377,6 +389,7 @@ export function BoardView({ projectId }: BoardViewProps) {
     ["tasks:changed", "projects:changed", "threads:changed"],
     [projectId],
   );
+  const workflows = useWorkflowSummaries(board.data?.tasks);
   const preferenceScope = listPreferenceScope(projectId, false);
   const [preference, setPreference] = useState<ListPreference>(() =>
     loadListPreference(preferenceScope),
@@ -411,15 +424,18 @@ export function BoardView({ projectId }: BoardViewProps) {
   );
   const displayTasks = useMemo(() => {
     if (!board.data) return undefined;
+    if (filters.waitingHuman && workflows.data === undefined) return undefined;
     return sortTasks(
       board.data.tasks.filter(
         (task) =>
           matchesFilters(task, filters.statuses, filters.priorities, []) &&
-          matchesLabelNames(task, filters.labelNames, labelsById),
+          matchesLabelNames(task, filters.labelNames, labelsById) &&
+          (!filters.waitingHuman ||
+            workflows.data?.get(task.id)?.status === "waiting_human"),
       ),
       sort,
     );
-  }, [board.data, filters, labelsById, sort]);
+  }, [board.data, filters, labelsById, sort, workflows.data]);
 
   // Local column state renders instantly on drop; realtime refetches replace
   // it with the server's authoritative fractional-position order.
@@ -658,6 +674,7 @@ export function BoardView({ projectId }: BoardViewProps) {
           task={task}
           labelsById={labelsById}
           meta={metaByTaskId.get(task.id) ?? EMPTY_META}
+          workflowStatus={workflows.data?.get(task.id)?.status}
           dragging={drag?.taskId === task.id}
           expanded={expandedTaskIds.has(task.id)}
           cardRef={(element) => {
@@ -744,6 +761,7 @@ export function BoardView({ projectId }: BoardViewProps) {
               task={ghostTask}
               labelsById={labelsById}
               meta={metaByTaskId.get(ghostTask.id) ?? EMPTY_META}
+              workflowStatus={workflows.data?.get(ghostTask.id)?.status}
               ghost
             />
           </div>

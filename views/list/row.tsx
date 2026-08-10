@@ -149,6 +149,7 @@ export interface TaskRowProps {
   /** Task with any pending optimistic edit already applied. */
   task: Task;
   meta: TaskRowMeta | undefined;
+  workflowStatus?: "running" | "waiting_agent" | "waiting_human" | "completed" | "failed";
   project: Project | undefined;
   showProject: boolean;
   labelsById: Map<string, Label>;
@@ -171,6 +172,7 @@ export interface TaskRowProps {
 export function TaskRow({
   task,
   meta,
+  workflowStatus,
   project,
   showProject,
   labelsById,
@@ -236,6 +238,7 @@ export function TaskRow({
         </span>
         <span className="col-start-3 row-start-2 flex min-w-0 items-center gap-1.5 justify-self-end text-xs text-subtle-foreground @max-md:overflow-hidden @md:shrink-0">
           {meta ? <ActiveChip threads={meta.activeThreads} /> : null}
+          {workflowStatus === "waiting_human" ? <span title="Workflow is waiting for a human decision" className={cn(RAIL_CHIP_CLASS, "border-warning/40 bg-warning/10 text-warning")}><Icon name="Clock" className="size-3" />Waiting for human</span> : null}
           <LabelChips task={task} labelsById={labelsById} />
           {task.dueDate !== null ? (
             <span className={`${RAIL_CHIP_CLASS} shrink-0 tabular-nums`}>

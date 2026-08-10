@@ -1,4 +1,6 @@
 import { listAllTasks, useTasksQuery } from "../../shell/data.js";
+import { useRpc } from "@bb/plugin-sdk/app";
+import type { WorkflowRpcContract } from "../../workflows/contract.js";
 import type {
   Label,
   Task,
@@ -76,6 +78,7 @@ export interface TaskRowMeta {
   /** Threads currently starting or working. Historical attachments (idle,
    * completed, failed) are excluded — list rows only surface live activity. */
   activeThreads: TaskThread[];
+  workflowStatus: "running" | "waiting_agent" | "waiting_human" | "completed" | "failed" | null;
 }
 
 /**
@@ -97,7 +100,7 @@ export function useTaskListMeta(tasks: readonly Task[] | undefined) {
         ),
       );
       const meta = new Map<string, TaskRowMeta>(
-        taskIds.map((taskId) => [taskId, { activeThreads: [] }]),
+        taskIds.map((taskId) => [taskId, { activeThreads: [], workflowStatus: null }]),
       );
       for (const thread of results.flatMap((result) => result.taskThreads)) {
         if (
@@ -112,4 +115,13 @@ export function useTaskListMeta(tasks: readonly Task[] | undefined) {
     ["threads:changed", "tasks:changed"],
     [taskIds.join()],
   );
+}
+
+export function useWorkflowSummaries(tasks: readonly Task[] | undefined) {
+  const rpc = useRpc<WorkflowRpcContract>();
+  const taskIds = (tasks ?? []).map((task) => task.id);
+  return useTasksQuery(async () => {
+    const result = await rpc.call("listWorkflowSummaries", { taskIds });
+    return new Map(result.workflows.map((workflow) => [workflow.taskId, workflow]));
+  }, ["workflow:changed"], [taskIds.join()]);
 }

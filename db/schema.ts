@@ -362,6 +362,56 @@ const MIGRATIONS = [
     CREATE INDEX workflow_events_run_sequence
       ON workflow_events(run_id, sequence);
   `,
+  `
+    CREATE TABLE workflow_definitions (
+      id TEXT NOT NULL,
+      revision TEXT NOT NULL,
+      markdown TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (id, revision)
+    );
+
+    CREATE TABLE project_workflow_bindings (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      workflow_id TEXT NOT NULL,
+      workflow_revision TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (workflow_id, workflow_revision)
+        REFERENCES workflow_definitions(id, revision)
+    );
+  `,
+  // Repair for databases that recorded a workflow migration during a failed
+  // plugin activation. Migration history is append-only, so never alter the
+  // original statements; make the physical schema self-healing here.
+  `
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY, workflow_id TEXT NOT NULL, workflow_revision TEXT NOT NULL,
+      tracker TEXT NOT NULL CHECK (tracker IN ('beads')), project_id TEXT NOT NULL,
+      work_item_id TEXT NOT NULL, work_item_key TEXT NOT NULL, work_item_title TEXT NOT NULL,
+      environment_id TEXT, stage TEXT NOT NULL, status TEXT NOT NULL,
+      state_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS workflow_runs_one_active_item
+      ON workflow_runs(tracker, project_id, work_item_id)
+      WHERE status NOT IN ('completed', 'failed');
+    CREATE INDEX IF NOT EXISTS workflow_runs_recovery ON workflow_runs(status, updated_at);
+    CREATE TABLE IF NOT EXISTS workflow_events (
+      id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      sequence INTEGER NOT NULL, type TEXT NOT NULL, data_json TEXT NOT NULL,
+      created_at TEXT NOT NULL, UNIQUE (run_id, sequence)
+    );
+    CREATE INDEX IF NOT EXISTS workflow_events_run_sequence ON workflow_events(run_id, sequence);
+    CREATE TABLE IF NOT EXISTS workflow_definitions (
+      id TEXT NOT NULL, revision TEXT NOT NULL, markdown TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY (id, revision)
+    );
+    CREATE TABLE IF NOT EXISTS project_workflow_bindings (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      workflow_id TEXT NOT NULL, workflow_revision TEXT NOT NULL, updated_at TEXT NOT NULL,
+      FOREIGN KEY (workflow_id, workflow_revision) REFERENCES workflow_definitions(id, revision)
+    );
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {
