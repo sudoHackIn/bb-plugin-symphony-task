@@ -327,7 +327,7 @@ export function registerExecution(
     const policies = new Map(
       executions.listProjectPolicies().map((policy) => [policy.projectId, policy]),
     );
-    const projects = await Promise.all(
+    const projects = (await Promise.all(
       store.tasks.listProjects().map(async (project) => {
         const binding = await readProjectProviderBinding(bb, project.id);
         const source: "local" | "beads" | "jira" | "automatic" =
@@ -342,15 +342,13 @@ export function registerExecution(
             ? "Local tracker supports transactional claims."
             : source === "automatic"
               ? "Choose Local Tasks explicitly before enabling autonomous execution."
-              : source === "beads"
-                ? "Autonomous execution is unavailable for Beads. Start an OpenSpec workflow from Dispatch."
-                : "Jira execution claims are not implemented yet.",
+              : "Jira execution claims are not implemented yet.",
           policy:
             policies.get(project.id) ??
             executions.getProjectPolicy(project.id),
         };
       }),
-    );
+    )).filter((project) => project.source !== "beads");
     const supportedProjects = new Set(
       projects.filter((project) => project.supported).map((project) => project.id),
     );
