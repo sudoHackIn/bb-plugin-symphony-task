@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRpc } from "@bb/plugin-sdk/app";
-import type { Folder, Label, Preset } from "../../shared/contract.js";
+import type { Folder, Label, Preset, Workflow } from "../../shared/contract.js";
 import {
   listAllTasks,
   useFolders,
@@ -8,6 +8,7 @@ import {
   useProjects,
   useTasksQuery,
   useTasksRpc,
+  useWorkflows,
 } from "../../shell/data.js";
 import {
   Select,
@@ -33,6 +34,10 @@ import {
 import { ColorSwatchPicker, DEFAULT_COLOR } from "./shared.js";
 import type { TaskProvidersRpcContract } from "../../providers/contract.js";
 import type { TaskProviderId } from "../../providers/contract.js";
+import {
+  WorkflowDialog,
+  type WorkflowDraft,
+} from "./workflow-dialog.js";
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -428,6 +433,226 @@ function PresetsSection() {
           onSave={(draft) => save(dialog.editing, draft)}
         />
       ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Workflows
+// ---------------------------------------------------------------------------
+
+const NO_WORKFLOW = "__none__";
+
+function WorkflowsSection() {
+  const rpc = useTasksRpc();
+  const workflows = useWorkflows();
+  const projects = useProjects();
+  const [dialog, setDialog] = useState<{
+    key: number;
+    editing: Workflow | null;
+  } | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<Workflow | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async (editing: Workflow | null, draft: WorkflowDraft) => {
+    if (editing) {
+      await rpc.call("updateWorkflow", {
+        workflowId: editing.id,
+        name: draft.name,
+        markdown: draft.markdown,
+      });
+    } else {
+      await rpc.call("createWorkflow", draft);
+    }
+    workflows.refresh();
+  };
+
+  const assign = async (projectId: string, workflowId: string | null) => {
+    setError(null);
+    try {
+      await rpc.call("updateProject", { projectId, workflowId });
+      projects.refresh();
+    } catch (assignError) {
+      setError(describeError(assignError));
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">
+            Reusable Markdown policies that tell dispatched agents how to work
+            and when to hand control back to a human.
+          </p>
+          <Button
+            size="sm"
+            className="h-7 shrink-0"
+            onClick={() => setDialog({ key: Date.now(), editing: null })}
+          >
+            <Icon name="Plus" className="size-3.5" />
+            New workflow
+          </Button>
+        </div>
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-border-hairline text-xs text-muted-foreground">
+                <th className="px-3 py-2 font-medium">Name</th>
+                <th className="px-3 py-2 font-medium">Revision</th>
+                <th className="px-3 py-2 font-medium">Projects</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border-hairline">
+              {(workflows.data ?? []).map((workflow) => {
+                const assigned = (projects.data ?? []).filter(
+                  (project) => project.workflowId === workflow.id,
+                );
+                return (
+                  <tr key={workflow.id} className="group">
+                    <td className="px-3 py-2">
+                      <span className="flex items-center gap-2">
+                        <Icon name="Workflow" className="size-3.5 text-muted-foreground" />
+                        {workflow.name}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-muted-foreground">
+                      {workflow.revision}
+                    </td>
+                    <td
+                      className="max-w-72 truncate px-3 py-2 text-muted-foreground"
+                      title={assigned.map((project) => project.name).join(", ")}
+                    >
+                      {assigned.length === 0
+                        ? "—"
+                        : assigned.map((project) => project.name).join(", ")}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100">
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="size-6 text-muted-foreground"
+                          aria-label={`Edit workflow ${workflow.name}`}
+                          onClick={() =>
+                            setDialog({ key: Date.now(), editing: workflow })
+                          }
+                        >
+                          <Icon name="Edit" className="size-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="size-6 text-muted-foreground hover:text-destructive"
+                          aria-label={`Delete workflow ${workflow.name}`}
+                          onClick={() => setConfirmDelete(workflow)}
+                        >
+                          <Icon name="Trash2" className="size-3.5" />
+                        </Button>
+                      </span>
+                    </td>
+                  </tr>
+                );
+              })}
+              {(workflows.data ?? []).length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="px-3 py-3 text-muted-foreground">
+                    No workflows yet. Projects continue using the built-in
+                    execution prompt.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="space-y-3">
+        <div>
+          <h3 className="text-sm font-medium">Project assignments</h3>
+          <p className="text-xs text-muted-foreground">
+            A workflow can be shared by any number of projects. Assignment
+            changes apply to future agent dispatches.
+          </p>
+        </div>
+        <div className="max-w-2xl divide-y divide-border-hairline rounded-md border border-border">
+          {(projects.data ?? []).map((project) => (
+            <div
+              key={project.id}
+              className="flex items-center justify-between gap-4 px-3 py-2"
+            >
+              <span className="min-w-0 truncate text-sm">{project.name}</span>
+              <Select
+                value={project.workflowId ?? NO_WORKFLOW}
+                onValueChange={(value) =>
+                  void assign(
+                    project.id,
+                    value === NO_WORKFLOW ? null : value,
+                  )
+                }
+              >
+                <SelectTrigger className="h-8 w-64">
+                  <SelectValue placeholder="No workflow" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_WORKFLOW}>No workflow</SelectItem>
+                  {(workflows.data ?? []).map((workflow) => (
+                    <SelectItem key={workflow.id} value={workflow.id}>
+                      {workflow.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+          {(projects.data ?? []).length === 0 ? (
+            <p className="px-3 py-3 text-sm text-muted-foreground">
+              Create a project before assigning a workflow.
+            </p>
+          ) : null}
+        </div>
+      </section>
+
+      {error ? (
+        <p role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
+      {dialog ? (
+        <WorkflowDialog
+          key={dialog.key}
+          open
+          editing={dialog.editing}
+          onOpenChange={(open) => {
+            if (!open) setDialog(null);
+          }}
+          onSave={(draft) => save(dialog.editing, draft)}
+        />
+      ) : null}
+      <ConfirmDialog
+        open={confirmDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmDelete(null);
+        }}
+        title={`Delete workflow “${confirmDelete?.name ?? ""}”?`}
+        description="Projects using it will return to the built-in execution prompt."
+        confirmLabel="Delete workflow"
+        destructive
+        onConfirm={() => {
+          const target = confirmDelete;
+          if (!target) return;
+          void rpc
+            .call("deleteWorkflow", { workflowId: target.id })
+            .then(() => {
+              workflows.refresh();
+              projects.refresh();
+            })
+            .catch((deleteError: unknown) =>
+              setError(describeError(deleteError)),
+            );
+        }}
+      />
     </div>
   );
 }
@@ -844,13 +1069,14 @@ export function ManagePanel({ className }: { className?: string }) {
       <header className="space-y-1">
         <h2 className="text-base font-semibold">Manage</h2>
         <p className="text-sm text-muted-foreground">
-          Projects, sources, labels, agent presets, and folders.
+          Projects, sources, workflows, labels, agent presets, and folders.
         </p>
       </header>
       <Tabs defaultValue="sources">
         <TabsList>
           <TabsTrigger value="projects">Projects</TabsTrigger>
           <TabsTrigger value="sources">Sources</TabsTrigger>
+          <TabsTrigger value="workflows">Workflows</TabsTrigger>
           <TabsTrigger value="labels">Labels</TabsTrigger>
           <TabsTrigger value="presets">Presets</TabsTrigger>
           <TabsTrigger value="folders">Folders</TabsTrigger>
@@ -860,6 +1086,9 @@ export function ManagePanel({ className }: { className?: string }) {
         </TabsContent>
         <TabsContent value="sources" className="pt-3">
           <SourcesSection />
+        </TabsContent>
+        <TabsContent value="workflows" className="pt-3">
+          <WorkflowsSection />
         </TabsContent>
         <TabsContent value="labels" className="pt-3">
           <LabelsSection />

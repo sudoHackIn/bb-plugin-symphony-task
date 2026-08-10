@@ -742,6 +742,25 @@ export function registerHandlers(
     listProjects(input) {
       return { projects: store.tasks.listProjects(input.folderId) };
     },
+    createWorkflow(input) {
+      const workflow = store.tasks.createWorkflow(input);
+      publishProjectsChanged(bb, null);
+      return { workflow };
+    },
+    updateWorkflow(input) {
+      const { workflowId, ...changes } = input;
+      const workflow = store.tasks.updateWorkflow(workflowId, changes);
+      publishProjectsChanged(bb, null);
+      return { workflow };
+    },
+    deleteWorkflow(input) {
+      const deleted = store.tasks.deleteWorkflow(input.workflowId);
+      if (deleted) publishProjectsChanged(bb, null);
+      return { deleted };
+    },
+    listWorkflows() {
+      return { workflows: store.tasks.listWorkflows() };
+    },
     createTask(input) {
       try {
         validateTaskParent(store, input.projectId, input.parentTaskId);
@@ -836,6 +855,47 @@ export function registerHandlers(
           publishCommentsChanged(bb, result.task.id);
         }
         return { ok: true, task: result.task };
+      } catch (error) {
+        if (error instanceof TasksDomainFailure) return taskFailure(error);
+        throw error;
+      }
+    },
+    resolveTaskReview(input) {
+      try {
+        const current = store.tasks.getTask(input.taskId);
+        if (!current) throw new Error(`Task not found: ${input.taskId}`);
+        if (current.status !== "in_review") {
+          fail(
+            "task_review_state_invalid",
+            `${current.key} is no longer awaiting review`,
+          );
+        }
+        const commentBody = input.comment.trim();
+        const result = store.transaction(() => {
+          if (commentBody) {
+            store.tasks.createComment({
+              taskId: current.id,
+              kind: "user",
+              authorName: "You",
+              presetName: null,
+              threadId: null,
+              body: commentBody,
+              notifiedCount: 0,
+            });
+          }
+          const nextStatus =
+            input.decision === "approve" ? "done" : "todo";
+          const updated = store.tasks.updateTask(current.id, {
+            status: nextStatus,
+          });
+          writeSystemComments(store, current.id, "You", [
+            `Status changed to ${statusName(updated.status)} by You`,
+          ]);
+          return apiTask(store, updated);
+        });
+        publishTasksChanged(bb, result.id, result.projectId);
+        publishCommentsChanged(bb, result.id);
+        return { ok: true, task: result };
       } catch (error) {
         if (error instanceof TasksDomainFailure) return taskFailure(error);
         throw error;

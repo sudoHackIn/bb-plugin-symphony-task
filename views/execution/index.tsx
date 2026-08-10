@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   useBbNavigate,
   useRealtime,
@@ -25,6 +25,12 @@ import {
 import { Icon } from "@/components/ui/icon";
 import { Input } from "@/components/ui/input";
 import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -49,6 +55,70 @@ function formatStatus(status: string): string {
     .split("_")
     .map((part) => part[0]?.toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function toggled(values: readonly string[], value: string, checked: boolean) {
+  if (checked) return values.includes(value) ? [...values] : [...values, value];
+  return values.filter((existing) => existing !== value);
+}
+
+function LabelPicker({
+  options,
+  value,
+  onChange,
+  disabled,
+}: {
+  options: Dashboard["projects"][number]["labels"];
+  value: string[];
+  onChange: (labels: string[]) => void;
+  disabled: boolean;
+}) {
+  const optionNames = new Map(
+    options.map((option) => [option.value, option.name]),
+  );
+  const selected = value.map((label) => optionNames.get(label) ?? label);
+  const selectable = [
+    ...options,
+    ...value
+      .filter((label) => !optionNames.has(label))
+      .map((label) => ({ value: label, name: `${label} (missing)` })),
+  ];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || selectable.length === 0}
+          className="w-full justify-start font-normal"
+        >
+          <Icon name="Target" className="size-3.5" />
+          <span className="truncate">
+            {selected.length > 0
+              ? selected.join(", ")
+              : options.length === 0
+                ? "No labels in tracker"
+                : "Select labels"}
+          </span>
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-56">
+        {selectable.map((option) => (
+          <DropdownMenuCheckboxItem
+            key={option.value}
+            checked={value.includes(option.value)}
+            onSelect={(event) => event.preventDefault()}
+            onCheckedChange={(checked) =>
+              onChange(toggled(value, option.value, checked === true))
+            }
+          >
+            {option.name}
+          </DropdownMenuCheckboxItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function ConfigCard({
@@ -179,103 +249,34 @@ function ConfigCard({
   );
 }
 
-function ProjectPolicyRow({
-  project,
-  presets,
-  refresh,
-}: {
-  project: Dashboard["projects"][number];
-  presets: Dashboard["presets"];
-  refresh: () => Promise<void>;
-}) {
-  const rpc = useRpc<ExecutionRpcContract>();
-  const [mode, setMode] = useState<ExecutionProjectMode>(project.policy.mode);
-  const [presetId, setPresetId] = useState(project.policy.presetId ?? "none");
-  const [maxWorkers, setMaxWorkers] = useState(
-    project.policy.maxWorkers?.toString() ?? "",
-  );
-  const [tokenBudget, setTokenBudget] = useState(
-    project.policy.tokenBudget?.toString() ?? "",
-  );
-  const [saving, setSaving] = useState(false);
-
-  const save = async () => {
-    setSaving(true);
-    try {
-      await rpc.call("setProjectExecutionPolicy", {
-        projectId: project.id,
-        mode,
-        presetId: presetId === "none" ? null : presetId,
-        maxWorkers: optionalNumber(maxWorkers),
-        tokenBudget: optionalNumber(tokenBudget),
-      });
-      await refresh();
-      toast.success(`${project.name} execution policy saved`);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="grid gap-3 border-t border-border-hairline py-3 first:border-t-0 first:pt-0 lg:grid-cols-[minmax(10rem,1fr)_9rem_11rem_8rem_9rem_auto] lg:items-end">
-      <div className="min-w-0">
-        <div className="truncate text-sm font-medium">{project.name}</div>
-        <div className={cn("text-xs", project.supported ? "text-muted-foreground" : "text-warning") }>
-          {project.source} · {project.supportDetail}
-        </div>
-      </div>
-      <label className="space-y-1 text-xs text-muted-foreground">
-        <span>Automation</span>
-        <Select value={mode} onValueChange={(value) => setMode(value as ExecutionProjectMode)} disabled={!project.supported}>
-          <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="off">Off</SelectItem>
-            <SelectItem value="opt_in">Opt-in tasks</SelectItem>
-            <SelectItem value="all_todo">All Todo</SelectItem>
-          </SelectContent>
-        </Select>
-      </label>
-      <label className="space-y-1 text-xs text-muted-foreground">
-        <span>Agent preset</span>
-        <Select value={presetId} onValueChange={setPresetId} disabled={!project.supported}>
-          <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="none">Not selected</SelectItem>
-            {presets.map((preset) => <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </label>
-      <label className="space-y-1 text-xs text-muted-foreground">
-        <span>Workers</span>
-        <Input className="h-8" type="number" min={1} max={32} placeholder="Global" value={maxWorkers} onChange={(event) => setMaxWorkers(event.target.value)} disabled={!project.supported} />
-      </label>
-      <label className="space-y-1 text-xs text-muted-foreground">
-        <span>Token budget</span>
-        <Input className="h-8" type="number" min={1000} placeholder="Global" value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} disabled={!project.supported} />
-      </label>
-      <Button size="sm" variant="secondary" disabled={saving || !project.supported} onClick={() => void save()}>
-        Save
-      </Button>
-    </div>
-  );
-}
-
 function TaskPolicyRow({
   task,
-  projectMode,
+  mode,
+  labelFilter,
+  labelMatch,
+  labelNames,
 }: {
   task: Dashboard["tasks"][number];
-  projectMode: ExecutionProjectMode;
+  mode: ExecutionProjectMode;
+  labelFilter: string[];
+  labelMatch: "any" | "all";
+  labelNames: Map<string, string>;
 }) {
   const rpc = useRpc<ExecutionRpcContract>();
   const [policy, setPolicy] = useState<TaskExecutionPolicy>(task.policy);
+  useEffect(() => setPolicy(task.policy), [task.policy]);
+  const inheritedRuns =
+    mode === "all_todo" ||
+    (mode === "opt_in" &&
+      labelFilter.length > 0 &&
+      (labelMatch === "all"
+        ? labelFilter.every((label) => task.labels.includes(label))
+        : labelFilter.some((label) => task.labels.includes(label))));
   const update = async (next: TaskExecutionPolicy) => {
     setPolicy(next);
     try {
       await rpc.call("setTaskExecutionPolicy", {
-        tracker: "local",
+        tracker: task.tracker,
         projectId: task.projectId,
         workItemId: task.id,
         policy: next,
@@ -288,7 +289,14 @@ function TaskPolicyRow({
   return (
     <div className="flex flex-wrap items-center gap-3 border-t border-border-hairline py-2 first:border-t-0">
       <span className="w-20 shrink-0 text-xs font-medium text-muted-foreground">{task.key}</span>
-      <span className="min-w-48 flex-1 truncate text-sm">{task.title}</span>
+      <div className="min-w-48 flex-1">
+        <div className="truncate text-sm">{task.title}</div>
+        {task.labels.length > 0 ? (
+          <div className="truncate text-xs text-muted-foreground">
+            {task.labels.map((label) => labelNames.get(label) ?? label).join(", ")}
+          </div>
+        ) : null}
+      </div>
       {task.latestStatus ? (
         <span className="text-xs text-muted-foreground">
           {formatStatus(task.latestStatus)} · attempt {task.latestAttempt}
@@ -298,13 +306,175 @@ function TaskPolicyRow({
         <SelectTrigger className="h-8 w-40"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="inherit">
-            Inherit ({projectMode === "all_todo" ? "run" : "skip"})
+            Inherit ({inheritedRuns ? "run" : "skip"})
           </SelectItem>
           <SelectItem value="enabled">Always run</SelectItem>
           <SelectItem value="disabled">Never run</SelectItem>
         </SelectContent>
       </Select>
     </div>
+  );
+}
+
+function ProjectPolicyCard({
+  project,
+  tasks,
+  presets,
+  refresh,
+}: {
+  project: Dashboard["projects"][number];
+  tasks: Dashboard["tasks"];
+  presets: Dashboard["presets"];
+  refresh: () => Promise<void>;
+}) {
+  const rpc = useRpc<ExecutionRpcContract>();
+  const [mode, setMode] = useState<ExecutionProjectMode>(project.policy.mode);
+  const [presetId, setPresetId] = useState(project.policy.presetId ?? "none");
+  const [maxWorkers, setMaxWorkers] = useState(
+    project.policy.maxWorkers?.toString() ?? "",
+  );
+  const [tokenBudget, setTokenBudget] = useState(
+    project.policy.tokenBudget?.toString() ?? "",
+  );
+  const [labelFilter, setLabelFilter] = useState(project.policy.labelFilter);
+  const [labelMatch, setLabelMatch] = useState<"any" | "all">(
+    project.policy.labelMatch,
+  );
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setMode(project.policy.mode);
+    setPresetId(project.policy.presetId ?? "none");
+    setMaxWorkers(project.policy.maxWorkers?.toString() ?? "");
+    setTokenBudget(project.policy.tokenBudget?.toString() ?? "");
+    setLabelFilter(project.policy.labelFilter);
+    setLabelMatch(project.policy.labelMatch);
+  }, [project.policy]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await rpc.call("setProjectExecutionPolicy", {
+        projectId: project.id,
+        mode,
+        presetId: presetId === "none" ? null : presetId,
+        maxWorkers: optionalNumber(maxWorkers),
+        tokenBudget: optionalNumber(tokenBudget),
+        labelFilter,
+        labelMatch,
+      });
+      await refresh();
+      toast.success(`${project.name} execution policy saved`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const labelNames = new Map(
+    project.labels.map((label) => [label.value, label.name]),
+  );
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-start justify-between gap-4 space-y-0 p-4">
+        <div className="min-w-0 space-y-1">
+          <CardTitle className="truncate text-sm">{project.name}</CardTitle>
+          <CardDescription
+            className={cn(!project.supported && "text-warning")}
+          >
+            {project.source} · {project.supportDetail}
+          </CardDescription>
+        </div>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={saving || !project.supported}
+          onClick={() => void save()}
+        >
+          Save project
+        </Button>
+      </CardHeader>
+      <CardContent className="space-y-4 p-4 pt-0">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          <label className="space-y-1 text-xs text-muted-foreground">
+            <span>Eligibility</span>
+            <Select
+              value={mode}
+              onValueChange={(value) =>
+                setMode(value as ExecutionProjectMode)
+              }
+              disabled={!project.supported}
+            >
+              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="off">Off</SelectItem>
+                <SelectItem value="opt_in">Labels + overrides</SelectItem>
+                <SelectItem value="all_todo">All ready tasks</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground">
+            <span>Agent preset</span>
+            <Select value={presetId} onValueChange={setPresetId} disabled={!project.supported}>
+              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Not selected</SelectItem>
+                {presets.map((preset) => <SelectItem key={preset.id} value={preset.id}>{preset.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground">
+            <span>Project workers</span>
+            <Input className="h-8" type="number" min={1} max={32} placeholder="Global ceiling" value={maxWorkers} onChange={(event) => setMaxWorkers(event.target.value)} disabled={!project.supported} />
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground">
+            <span>Tokens per run</span>
+            <Input className="h-8" type="number" min={1000} placeholder="Global default" value={tokenBudget} onChange={(event) => setTokenBudget(event.target.value)} disabled={!project.supported} />
+          </label>
+          <label className="space-y-1 text-xs text-muted-foreground">
+            <span>Label matching</span>
+            <Select value={labelMatch} onValueChange={(value) => setLabelMatch(value as "any" | "all")} disabled={!project.supported || mode !== "opt_in"}>
+              <SelectTrigger className="h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">Any selected label</SelectItem>
+                <SelectItem value="all">All selected labels</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+        </div>
+        <div className="space-y-1.5">
+          <div className="text-xs text-muted-foreground">Automation labels</div>
+          <LabelPicker
+            options={project.labels}
+            value={labelFilter}
+            onChange={setLabelFilter}
+            disabled={!project.supported || mode !== "opt_in"}
+          />
+          <p className="text-xs text-muted-foreground">
+            In label mode, inherited ready tasks run when they match this project rule. Always/Never below are explicit exceptions.
+          </p>
+        </div>
+        <div className="border-t border-border-hairline pt-3">
+          <div className="mb-1 text-xs font-medium">Task overrides</div>
+          {tasks.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No active tasks in this tracker.</p>
+          ) : (
+            tasks.map((task) => (
+              <TaskPolicyRow
+                key={`${task.tracker}:${task.id}`}
+                task={task}
+                mode={mode}
+                labelFilter={labelFilter}
+                labelMatch={labelMatch}
+                labelNames={labelNames}
+              />
+            ))
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -373,10 +543,6 @@ export function ExecutionView() {
   useEffect(() => { void refresh(); }, [refresh]);
   useRealtime("execution:changed", () => void refresh());
 
-  const projectMode = useMemo(
-    () => new Map((dashboard?.projects ?? []).map((project) => [project.id, project.policy.mode])),
-    [dashboard],
-  );
   if (!dashboard) {
     return <div className="p-5 text-sm text-muted-foreground">{error ?? "Loading execution controls…"}</div>;
   }
@@ -385,26 +551,23 @@ export function ExecutionView() {
       <div className="mx-auto w-full max-w-6xl space-y-4">
         {error ? <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">{error}</div> : null}
         <ConfigCard dashboard={dashboard} refresh={refresh} />
-        <Card>
-          <CardHeader className="p-4">
-            <CardTitle className="text-sm">Project workers</CardTitle>
-            <CardDescription>
-              Projects default to Off. Opt-in runs only explicitly enabled tasks; All Todo runs every inherited Todo task.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            {dashboard.projects.map((project) => <ProjectPolicyRow key={project.id} project={project} presets={dashboard.presets} refresh={refresh} />)}
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="p-4">
-            <CardTitle className="text-sm">Task eligibility</CardTitle>
-            <CardDescription>Per-task policy wins over the project automation mode.</CardDescription>
-          </CardHeader>
-          <CardContent className="p-4 pt-0">
-            {dashboard.tasks.length === 0 ? <p className="text-sm text-muted-foreground">No local Todo, active, or review tasks.</p> : dashboard.tasks.map((task) => <TaskPolicyRow key={task.id} task={task} projectMode={projectMode.get(task.projectId) ?? "off"} />)}
-          </CardContent>
-        </Card>
+        <div className="space-y-2 px-1">
+          <h2 className="text-sm font-medium">Project execution policies</h2>
+          <p className="text-xs text-muted-foreground">
+            Eligibility, labels, preset, workers, and token limits are configured independently for every project.
+          </p>
+        </div>
+        {dashboard.projects.map((project) => (
+          <ProjectPolicyCard
+            key={project.id}
+            project={project}
+            tasks={dashboard.tasks.filter(
+              (task) => task.projectId === project.id,
+            )}
+            presets={dashboard.presets}
+            refresh={refresh}
+          />
+        ))}
         <RunsCard dashboard={dashboard} refresh={refresh} />
       </div>
     </div>

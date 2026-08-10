@@ -3,6 +3,7 @@ import type { PluginDatabase } from "../api/index.js";
 import type {
   EligibleWorkItem,
   ExecutionConfig,
+  ExecutionLabelMatch,
   ExecutionProjectMode,
   ExecutionRun,
   ExecutionRunStatus,
@@ -10,6 +11,7 @@ import type {
   TaskExecutionPolicy,
   TaskExecutionPolicyRecord,
 } from "./types.js";
+import { matchesProjectEligibility } from "./eligibility.js";
 
 const ACTIVE_STATUSES: readonly ExecutionRunStatus[] = [
   "claimed",
@@ -32,6 +34,8 @@ interface ProjectPolicyRow {
   preset_id: string | null;
   max_workers: number | null;
   token_budget: number | null;
+  label_filter: string;
+  label_match: ExecutionLabelMatch;
   updated_at: string;
 }
 
@@ -76,6 +80,22 @@ interface EligibleRow {
   policy: TaskExecutionPolicy | null;
   latest_status: ExecutionRunStatus | null;
   latest_attempt: number | null;
+  label_values: string | null;
+}
+
+function parseLabelFilter(value: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((label): label is string => typeof label === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowLabels(row: EligibleRow): string[] {
+  return row.label_values?.split(",").filter(Boolean) ?? [];
 }
 
 function configFromRow(row: ConfigRow): ExecutionConfig {
@@ -96,6 +116,8 @@ function projectPolicyFromRow(row: ProjectPolicyRow): ProjectExecutionPolicy {
     presetId: row.preset_id,
     maxWorkers: row.max_workers,
     tokenBudget: row.token_budget,
+    labelFilter: parseLabelFilter(row.label_filter),
+    labelMatch: row.label_match,
     updatedAt: row.updated_at,
   };
 }
@@ -150,11 +172,15 @@ export interface ExecutionStore {
   getProjectPolicy(projectId: string): ProjectExecutionPolicy;
   setProjectPolicy(input: Omit<ProjectExecutionPolicy, "updatedAt">): ProjectExecutionPolicy;
   listTaskPolicies(projectId?: string): TaskExecutionPolicyRecord[];
+  getTaskPolicy(
+    tracker: ExecutionRun["tracker"],
+    projectId: string,
+    workItemId: string,
+  ): TaskExecutionPolicyRecord | null;
   setTaskPolicy(input: Omit<TaskExecutionPolicyRecord, "updatedAt">): TaskExecutionPolicyRecord;
   listLocalAutomationTasks(projectId?: string): EligibleWorkItem[];
   listEligibleLocal(input: {
-    projectId: string;
-    mode: ExecutionProjectMode;
+    policy: ProjectExecutionPolicy;
     maxAttempts: number;
     limit: number;
   }): EligibleWorkItem[];
@@ -163,8 +189,21 @@ export interface ExecutionStore {
     presetId: string;
     tokenBudget: number | null;
   }): ExecutionRun | null;
+  claimExternal(input: {
+    tracker: Exclude<ExecutionRun["tracker"], "local">;
+    item: EligibleWorkItem;
+    claimId: string;
+    claimExpiresAt: string;
+    presetId: string;
+    tokenBudget: number | null;
+  }): ExecutionRun | null;
   attachThread(runId: string, threadId: string): ExecutionRun;
   getRun(runId: string): ExecutionRun | null;
+  getLatestRun(
+    tracker: ExecutionRun["tracker"],
+    projectId: string,
+    workItemId: string,
+  ): ExecutionRun | null;
   getRunByThread(threadId: string): ExecutionRun | null;
   listRuns(limit?: number): ExecutionRun[];
   listActiveRuns(): ExecutionRun[];
@@ -192,19 +231,20 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
   };
 
   const latestRun = (
+    tracker: ExecutionRun["tracker"],
     projectId: string,
     workItemId: string,
   ): ExecutionRun | null => {
     const row = database
-      .prepare<[string, string], RunRow>(
+      .prepare<[ExecutionRun["tracker"], string, string], RunRow>(
         `
           SELECT * FROM execution_runs
-          WHERE tracker = 'local' AND project_id = ? AND work_item_id = ?
+          WHERE tracker = ? AND project_id = ? AND work_item_id = ?
           ORDER BY created_at DESC, id DESC
           LIMIT 1
         `,
       )
-      .get(projectId, workItemId);
+      .get(tracker, projectId, workItemId);
     return row ? runFromRow(row) : null;
   };
 
@@ -219,6 +259,11 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
             t.title,
             t.status AS task_status,
             t.updated_at,
+            (
+              SELECT GROUP_CONCAT(tl.label_id, ',')
+              FROM task_labels tl
+              WHERE tl.task_id = t.id
+            ) AS label_values,
             tep.policy,
             (
               SELECT er.status FROM execution_runs er
@@ -309,6 +354,8 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
             presetId: null,
             maxWorkers: null,
             tokenBudget: null,
+            labelFilter: [],
+            labelMatch: "any",
             updatedAt: new Date(0).toISOString(),
           };
     },
@@ -316,17 +363,29 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
       const updatedAt = nowIso();
       database
         .prepare<
-          [string, ExecutionProjectMode, string | null, number | null, number | null, string]
+          [
+            string,
+            ExecutionProjectMode,
+            string | null,
+            number | null,
+            number | null,
+            string,
+            ExecutionLabelMatch,
+            string,
+          ]
         >(
           `
             INSERT INTO project_execution_policies (
-              project_id, mode, preset_id, max_workers, token_budget, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+              project_id, mode, preset_id, max_workers, token_budget,
+              label_filter, label_match, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(project_id) DO UPDATE SET
               mode = excluded.mode,
               preset_id = excluded.preset_id,
               max_workers = excluded.max_workers,
               token_budget = excluded.token_budget,
+              label_filter = excluded.label_filter,
+              label_match = excluded.label_match,
               updated_at = excluded.updated_at
           `,
         )
@@ -336,6 +395,8 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
           input.presetId,
           input.maxWorkers,
           input.tokenBudget,
+          JSON.stringify(Array.from(new Set(input.labelFilter))),
+          input.labelMatch,
           updatedAt,
         );
       return this.getProjectPolicy(input.projectId);
@@ -353,6 +414,20 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
             )
             .all();
       return rows.map(taskPolicyFromRow);
+    },
+    getTaskPolicy(tracker, projectId, workItemId) {
+      const row = database
+        .prepare<
+          [ExecutionRun["tracker"], string, string],
+          TaskPolicyRow
+        >(
+          `
+            SELECT * FROM task_execution_policies
+            WHERE tracker = ? AND project_id = ? AND work_item_id = ?
+          `,
+        )
+        .get(tracker, projectId, workItemId);
+      return row ? taskPolicyFromRow(row) : null;
     },
     setTaskPolicy(input) {
       const updatedAt = nowIso();
@@ -388,21 +463,20 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
         key: row.task_key,
         title: row.title,
         version: row.updated_at,
+        labels: rowLabels(row),
         policy: row.policy ?? "inherit",
         latestStatus: row.latest_status,
         latestAttempt: row.latest_attempt,
       }));
     },
     listEligibleLocal(input) {
-      if (input.mode === "off") return [];
-      return listLocalRows(input.projectId)
+      if (input.policy.mode === "off") return [];
+      return listLocalRows(input.policy.projectId)
         .filter((row) => {
           if (row.task_status !== "todo") return false;
           const policy = row.policy ?? "inherit";
-          const selected =
-            policy === "enabled" ||
-            (policy === "inherit" && input.mode === "all_todo");
-          if (!selected) return false;
+          if (!matchesProjectEligibility(rowLabels(row), policy, input.policy))
+            return false;
           if (row.latest_status === "budget_exhausted") return false;
           if (
             row.latest_status === "failed" &&
@@ -419,6 +493,7 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
           key: row.task_key,
           title: row.title,
           version: row.updated_at,
+          labels: rowLabels(row),
           policy: row.policy ?? "inherit",
           latestStatus: row.latest_status,
           latestAttempt: row.latest_attempt,
@@ -446,7 +521,7 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
           .get(input.item.projectId, input.item.id);
         if (active) return null;
 
-        const previous = latestRun(input.item.projectId, input.item.id);
+        const previous = latestRun("local", input.item.projectId, input.item.id);
         const attempt = previous?.status === "failed" ? previous.attempt + 1 : 1;
         const createdAt = nowIso();
         const id = randomUUID();
@@ -494,6 +569,77 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
         return getRun(id);
       })();
     },
+    claimExternal(input) {
+      return database.transaction(() => {
+        const active = database
+          .prepare<
+            [ExecutionRun["tracker"], string, string],
+            { found: number }
+          >(
+            `
+              SELECT 1 AS found FROM execution_runs
+              WHERE tracker = ? AND project_id = ? AND work_item_id = ?
+                AND status IN ('claimed', 'starting', 'running')
+              LIMIT 1
+            `,
+          )
+          .get(input.tracker, input.item.projectId, input.item.id);
+        if (active) return null;
+
+        const previous = latestRun(
+          input.tracker,
+          input.item.projectId,
+          input.item.id,
+        );
+        const attempt = previous ? previous.attempt + 1 : 1;
+        const createdAt = nowIso();
+        const id = randomUUID();
+        database
+          .prepare<
+            [
+              string,
+              ExecutionRun["tracker"],
+              string,
+              string,
+              string,
+              string,
+              string,
+              string,
+              string,
+              number,
+              string,
+              number | null,
+              string,
+              string,
+            ]
+          >(
+            `
+              INSERT INTO execution_runs (
+                id, tracker, project_id, work_item_id, task_key, task_title,
+                external_version, claim_id, claim_expires_at, status, attempt,
+                preset_id, token_budget, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'claimed', ?, ?, ?, ?, ?)
+            `,
+          )
+          .run(
+            id,
+            input.tracker,
+            input.item.projectId,
+            input.item.id,
+            input.item.key,
+            input.item.title,
+            input.item.version,
+            input.claimId,
+            input.claimExpiresAt,
+            attempt,
+            input.presetId,
+            input.tokenBudget,
+            createdAt,
+            createdAt,
+          );
+        return getRun(id);
+      })();
+    },
     attachThread(runId, threadId) {
       database
         .prepare<[string, string, string, string]>(
@@ -509,6 +655,7 @@ export function createExecutionStore(database: PluginDatabase): ExecutionStore {
       return run;
     },
     getRun,
+    getLatestRun: latestRun,
     getRunByThread(threadId) {
       const row = database
         .prepare<[string], RunRow>(

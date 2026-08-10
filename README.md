@@ -36,6 +36,7 @@ references. It never deletes issues from Beads or Jira.
 | Read labels | Yes | Yes | Yes |
 | Edit labels | Yes | No | No |
 | Read and add comments | Yes | Yes | No |
+| Autonomous execution claims | Yes | Yes | No |
 | Dependencies and task links | No | Yes | No |
 | Delete tasks | Yes | No | No |
 | Provider-backed attachments | Yes | No | No |
@@ -61,9 +62,9 @@ alongside the code. The integration:
 - uses the Beads database or version-control revision to avoid reloading an
   unchanged issue list.
 
-Beads deletion, label mutation, and provider-backed attachments are not
-supported. Attachments or other local orchestration metadata must not be
-expected to synchronize into Beads.
+Beads deletion, general label mutation, and provider-backed attachments are
+not supported. Symphony reserves the `symphony:review` label plus
+`symphony.*` metadata keys for execution claims and review handoff.
 
 Beads uses `bd` from `PATH` by default. Set `beadsExecutable` to use a different
 command name or an absolute executable path.
@@ -138,12 +139,14 @@ targets are saved.
 
 ## Autonomous execution
 
-The **Execution** screen controls the local-trackers execution engine:
+The **Execution** screen controls the Local and Beads execution engine:
 
 - the engine is paused after installation and never claims work implicitly;
 - global and per-project worker limits bound concurrent BB threads;
-- every project starts in `off`, then can use `opt-in` or `all Todo` mode;
-- a per-task override can inherit, always run, or never run;
+- every project independently selects `off`, label-based eligibility, or all
+  ready tasks;
+- label-based projects can require any or all selected tracker labels;
+- a per-task override can inherit the project rule, always run, or never run;
 - an agent preset selects the provider, model, permissions, and worktree;
 - global and per-project token budgets are enforced from BB token-usage
   events. Enforcement is best-effort and may overshoot slightly between an
@@ -151,9 +154,48 @@ The **Execution** screen controls the local-trackers execution engine:
 - runs release their claim when the task reaches review. Moving the task back
   to Todo makes it eligible for a new execution.
 
-Only projects explicitly using **Local Tasks** are executable in this first
-version. Beads and Jira remain tracker adapters in the UI, but autonomous
-claims stay disabled until their distributed claim semantics are implemented.
+Beads eligibility uses its blocker-aware `bd ready` view. Claims use Beads'
+atomic `bd ready --claim`; Symphony records a renewable claim ID, expiry, and
+BB thread ID in `symphony.*` metadata. Review is represented by an open issue
+with the `symphony:review` label, which keeps it out of `bd ready` until a human
+moves it back to Todo. Jira autonomous claims remain disabled.
+
+### Current scope and remaining work
+
+This implements the task-first orchestration baseline: manual dispatch remains
+available, while per-project execution policies and per-task overrides provide
+automatic and hybrid operation. Runs have durable claims, a single active
+primary worker per task, reconciliation after restarts or lost threads, bounded
+attempts, and visible retry controls.
+
+Two deliberate limits remain before this becomes a fully configurable workflow
+engine: the runtime status mapping is fixed (`Todo` starts work and `In Review`
+hands work to a human), rather than a user-defined transition map; and retries
+are manually initiated rather than scheduled with exponential backoff. Jira is
+also read-only and does not participate in autonomous execution.
+
+## Project workflows
+
+Reusable project workflows are Markdown policies for dispatched agents. Create
+them under **Tasks → Manage → Workflows**, then assign the same workflow to one
+or more Tasks projects. The selected Markdown is appended to both manual
+delegation prompts and autonomous execution prompts; assignment changes affect
+future dispatches.
+
+Task statuses remain the durable workflow state. A workflow should describe
+what an agent does in Todo and In Progress, when it moves work to In Review for
+a human handoff, how it responds when a human returns the task to Todo, and why
+agents must not mark reviewed work Done themselves. Workflows are instructions,
+not executable graphs: polling, claims, retries, concurrency, budgets, and the
+In Review handoff remain enforced by the execution engine.
+
+An In Review task shows the latest agent update in a dedicated human-review
+panel after the attached agent finishes its turn. **Approve and complete**
+moves it to Done. **Respond / request changes** requires a comment, records
+that response in task activity, and returns the task to the ready queue (Todo
+for Local Tasks, open for Beads) so the next eligible run receives the feedback
+as context. No separate approval record is created; task status and comments
+are the audit trail.
 
 ## Development
 

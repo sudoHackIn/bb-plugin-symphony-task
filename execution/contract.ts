@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { defineRpcContract } from "../rpc-runtime.js";
 import {
+  EXECUTION_LABEL_MATCHES,
   EXECUTION_PROJECT_MODES,
   EXECUTION_RUN_STATUSES,
   TASK_EXECUTION_POLICIES,
@@ -9,6 +10,7 @@ import {
 const positiveWorkerCount = z.number().int().min(1).max(32);
 const tokenBudget = z.number().int().min(1_000).nullable();
 const projectMode = z.enum(EXECUTION_PROJECT_MODES);
+const labelMatch = z.enum(EXECUTION_LABEL_MATCHES);
 const taskPolicy = z.enum(TASK_EXECUTION_POLICIES);
 const runStatus = z.enum(EXECUTION_RUN_STATUSES);
 
@@ -30,6 +32,8 @@ const projectPolicySchema = z
     presetId: z.string().nullable(),
     maxWorkers: positiveWorkerCount.nullable(),
     tokenBudget,
+    labelFilter: z.array(z.string().min(1)).max(100),
+    labelMatch,
     updatedAt: z.string(),
   })
   .strict();
@@ -74,6 +78,9 @@ export const executionRpcContract = defineRpcContract({
               source: z.enum(["local", "beads", "jira", "automatic"]),
               supported: z.boolean(),
               supportDetail: z.string(),
+              labels: z.array(
+                z.object({ value: z.string(), name: z.string() }).strict(),
+              ),
               policy: projectPolicySchema,
             })
             .strict(),
@@ -85,9 +92,11 @@ export const executionRpcContract = defineRpcContract({
           z
             .object({
               id: z.string(),
+              tracker: z.enum(["local", "beads", "jira"]),
               projectId: z.string(),
               key: z.string(),
               title: z.string(),
+              labels: z.array(z.string()),
               policy: taskPolicy,
               latestStatus: runStatus.nullable(),
               latestAttempt: z.number().int().positive().nullable(),

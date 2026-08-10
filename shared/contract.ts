@@ -103,7 +103,19 @@ export const projectSchema = z
     color: z.string(),
     folderId: idSchema.nullable(),
     linkedBbProjectId: z.string().startsWith("proj_").nullable(),
+    workflowId: idSchema.nullable(),
     createdAt: z.string(),
+  })
+  .strict();
+
+export const workflowSchema = z
+  .object({
+    id: idSchema,
+    name: z.string(),
+    markdown: z.string(),
+    revision: z.number().int().positive(),
+    createdAt: z.string(),
+    updatedAt: z.string(),
   })
   .strict();
 
@@ -261,6 +273,7 @@ export const tasksDomainErrorSchema = z
       "project_not_empty",
       "project_prefix_conflict",
       "attachment_referenced",
+      "task_review_state_invalid",
     ]),
     message: z.string(),
   })
@@ -339,6 +352,7 @@ const updateProjectInputSchema = z
     color: nonBlankStringSchema.optional(),
     folderId: idSchema.nullable().optional(),
     linkedBbProjectId: z.string().startsWith("proj_").nullable().optional(),
+    workflowId: idSchema.nullable().optional(),
   })
   .strict()
   .refine(
@@ -346,7 +360,8 @@ const updateProjectInputSchema = z
       input.name !== undefined ||
       input.color !== undefined ||
       input.folderId !== undefined ||
-      input.linkedBbProjectId !== undefined,
+      input.linkedBbProjectId !== undefined ||
+      input.workflowId !== undefined,
     { message: "at least one project field must be updated" },
   );
 
@@ -483,6 +498,37 @@ export const tasksRpcContract = defineRpcContract({
     input: z.object({ folderId: idSchema.nullable().optional() }).strict(),
     output: z.object({ projects: z.array(projectSchema) }).strict(),
   },
+  createWorkflow: {
+    input: z
+      .object({
+        name: nonBlankStringSchema.max(120),
+        markdown: nonBlankStringSchema.max(65_536),
+      })
+      .strict(),
+    output: z.object({ workflow: workflowSchema }).strict(),
+  },
+  updateWorkflow: {
+    input: z
+      .object({
+        workflowId: idSchema,
+        name: nonBlankStringSchema.max(120).optional(),
+        markdown: nonBlankStringSchema.max(65_536).optional(),
+      })
+      .strict()
+      .refine(
+        (input) => input.name !== undefined || input.markdown !== undefined,
+        { message: "at least one workflow field must be updated" },
+      ),
+    output: z.object({ workflow: workflowSchema }).strict(),
+  },
+  deleteWorkflow: {
+    input: z.object({ workflowId: idSchema }).strict(),
+    output: z.object({ deleted: z.boolean() }).strict(),
+  },
+  listWorkflows: {
+    input: z.null(),
+    output: z.object({ workflows: z.array(workflowSchema) }).strict(),
+  },
   createTask: {
     input: z
       .object({
@@ -517,6 +563,24 @@ export const tasksRpcContract = defineRpcContract({
   },
   updateTask: {
     input: updateTaskInputSchema,
+    output: taskMutationResultSchema,
+  },
+  resolveTaskReview: {
+    input: z
+      .object({
+        taskId: idSchema,
+        decision: z.enum(["approve", "request_changes"]),
+        comment: z.string().max(65_536).default(""),
+      })
+      .strict()
+      .refine(
+        (input) =>
+          input.decision !== "request_changes" || input.comment.trim() !== "",
+        {
+          path: ["comment"],
+          message: "a response is required when requesting changes",
+        },
+      ),
     output: taskMutationResultSchema,
   },
   deleteTask: {
@@ -813,6 +877,7 @@ export const tasksRpcContract = defineRpcContract({
 export type TasksRpcContract = typeof tasksRpcContract;
 export type Folder = z.infer<typeof folderSchema>;
 export type Project = z.infer<typeof projectSchema>;
+export type Workflow = z.infer<typeof workflowSchema>;
 export type Task = z.infer<typeof taskSchema>;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];

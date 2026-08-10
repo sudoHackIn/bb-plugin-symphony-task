@@ -36,7 +36,7 @@ export interface ResolvedProjectProvider {
   source: TaskSource | null;
 }
 
-type SettingsHandle = PluginSettingsHandle<{
+export type ProviderSettingsHandle = PluginSettingsHandle<{
   beadsExecutable: { type: "string"; label: string; description: string; default: string };
   jiraBaseUrl: { type: "string"; label: string; default: string };
   jiraEmail: { type: "string"; label: string; default: string };
@@ -76,7 +76,7 @@ async function beadsWorkspaceForProject(
 
 export async function resolveProjectProvider(
   bb: BbPluginApi,
-  settingsHandle: SettingsHandle,
+  settingsHandle: ProviderSettingsHandle,
   project: { id: string; linkedBbProjectId: string | null },
 ): Promise<ResolvedProjectProvider> {
   const [settings, binding] = await Promise.all([
@@ -166,13 +166,15 @@ export function syntheticUlid(projectId: string, nativeId: string): string {
 
 function officialStatus(status: UnifiedTask["status"]): TaskStatus {
   if (status === "in_progress") return "in_progress";
+  if (status === "in_review") return "in_review";
   if (status === "done") return "done";
   if (status === "blocked") return "todo";
   return "backlog";
 }
 
 export function sourceStatus(status: TaskStatus): UnifiedTask["status"] {
-  if (status === "in_progress" || status === "in_review") return "in_progress";
+  if (status === "in_progress") return "in_progress";
+  if (status === "in_review") return "in_review";
   if (status === "done" || status === "canceled") return "done";
   return "backlog";
 }

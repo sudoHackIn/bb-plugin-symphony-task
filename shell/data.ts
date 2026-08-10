@@ -166,6 +166,13 @@ export function usePresets() {
   );
 }
 
+export function useWorkflows() {
+  return useTasksQuery(
+    async (rpc) => (await rpc.call("listWorkflows")).workflows,
+    ["projects:changed"],
+  );
+}
+
 export function useSidebarSummary() {
   return useTasksQuery(
     async (rpc) => (await rpc.call("sidebarSummary")).projects,

@@ -31,6 +31,7 @@ import { DetailToasts, useDetailToasts } from "./toast.js";
 import { WorkflowPanel } from "./workflow.js";
 import { Icon } from "@/components/ui/icon";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ReviewPanel } from "./review-panel.js";
 
 export interface DetailViewProps {
   /** Task key like TSK-4 (not the ULID). */
@@ -495,6 +496,22 @@ function TaskDetail({
             onError={(message) => push("error", message)}
             className="mb-4 @[45rem]:hidden"
           />
+
+          {task.status === "in_review" ? (
+            <ReviewPanel
+              key={task.id}
+              task={task}
+              agentBusy={
+                threads.isLoading ||
+                (threads.data ?? []).some(
+                  (thread) =>
+                    thread.liveStatus === "starting" ||
+                    thread.liveStatus === "working",
+                )
+              }
+              onError={(message) => push("error", message)}
+            />
+          ) : null}
 
           <TasksEditor
             value={descriptionValue}

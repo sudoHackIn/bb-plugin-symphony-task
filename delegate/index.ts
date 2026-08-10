@@ -58,6 +58,8 @@ export interface SeedPromptInput {
   subtasks: readonly Task[];
   attachments: readonly Pick<Attachment, "id" | "fileName">[];
   recentComments: readonly Comment[];
+  workflowName?: string;
+  workflowMarkdown: string;
   presetInstructions: string;
   extraInstructions?: string;
 }
@@ -110,9 +112,25 @@ export function buildSeedPrompt(input: SeedPromptInput): string {
     markdownSection("Sub-tasks", formatSubtasks(input.subtasks)),
     markdownSection("Attachments", formatAttachments(input.attachments)),
     markdownSection("Recent comments", formatComments(input.recentComments)),
+    ...(input.workflowMarkdown.trim()
+      ? [
+          markdownSection(
+            "Project workflow",
+            input.workflowMarkdown.trim(),
+          ),
+        ]
+      : []),
+    ...(input.workflowName
+      ? [
+          markdownSection(
+            "Child-thread titles",
+            `If this workflow creates child threads, title each one \`${input.workflowName} · <phase>\` (for example, \`${input.workflowName} · OpenSpec review\`). Do not repeat the task key or task title in a child-thread title; that information belongs only in this parent thread.`,
+          ),
+        ]
+      : []),
     markdownSection(
       "Report-back contract",
-      `You are working on task ${input.task.key}. Use the bb tasks CLI: comment substantive updates (bb tasks comment ${input.task.key} --body ...), attach result artifacts, set status when done (bb tasks update ${input.task.key} --status in_review) or explain blockage in a comment. Your thread is already attached to the task.`,
+      `You are working on task ${input.task.key}. Use the bb tasks CLI: comment substantive updates (bb tasks comment ${input.task.key} --body ...), attach result artifacts, set status when done (bb tasks update ${input.task.key} --status in_review) or explain blockage in a comment. Before moving to In Review, leave a final comment that states the result, evidence, and the question or decision needed from the human reviewer. Your thread is already attached to the task.`,
     ),
   ];
 
@@ -255,6 +273,41 @@ function mapSpawnTargetError(error: unknown, preset: Preset): never {
   throw error;
 }
 
+export async function spawnPresetThread(
+  bb: BbPluginApi,
+  store: TasksApiStore,
+  input: {
+    taskProjectId: string;
+    presetId: string;
+    title: string;
+    prompt: string;
+  },
+): Promise<{ threadId: string; preset: Preset }> {
+  const project = requireProject(store.tasks, input.taskProjectId);
+  const linkedBbProjectId = requireLinkedBbProject(project);
+  const preset = requirePreset(store.tasks, input.presetId);
+  const execution = presetExecutionSchema.parse({
+    providerId: preset.providerId,
+    model: preset.modelId,
+    reasoningLevel: preset.reasoningLevel,
+    permissionMode: preset.permissionMode,
+  });
+  const environment = await presetSpawnEnvironment(bb, preset);
+  const thread = await bb.sdk.threads
+    .spawn({
+      projectId: linkedBbProjectId,
+      environment,
+      providerId: execution.providerId,
+      model: execution.model,
+      reasoningLevel: execution.reasoningLevel,
+      permissionMode: execution.permissionMode,
+      title: input.title.slice(0, MAX_DELEGATED_THREAD_TITLE_LENGTH),
+      prompt: input.prompt,
+    })
+    .catch((error: unknown) => mapSpawnTargetError(error, preset));
+  return { threadId: thread.id, preset };
+}
+
 export function createSystemComment(
   store: TasksStore,
   input: {
@@ -319,45 +372,38 @@ export function handlers(
     async delegate(input) {
       const task = requireTask(store.tasks, input.taskId);
       const project = requireProject(store.tasks, task.projectId);
-      const linkedBbProjectId = requireLinkedBbProject(project);
       const preset = requirePreset(store.tasks, input.presetId);
       const comments = store.tasks.listComments(task.id);
       const recentComments = comments.slice(-5);
+      const workflow = project.workflowId
+        ? store.tasks.getWorkflow(project.workflowId)
+        : undefined;
       const title = delegatedThreadTitle(task);
-      const execution = presetExecutionSchema.parse({
-        providerId: preset.providerId,
-        model: preset.modelId,
-        reasoningLevel: preset.reasoningLevel,
-        permissionMode: preset.permissionMode,
-      });
       const prompt = buildSeedPrompt({
         task,
         project,
         subtasks: store.tasks.listSubtasks(task.id),
         attachments: collectAttachments(store.tasks, task.id, comments),
         recentComments,
+        workflowName: workflow?.name,
+        workflowMarkdown: workflow
+          ? `Workflow: ${workflow.name} · revision ${workflow.revision}\n\n${workflow.markdown}`
+          : "",
         presetInstructions: preset.instructions,
         extraInstructions: input.extraInstructions,
       });
 
-      const environment = await presetSpawnEnvironment(bb, preset);
-      const thread = await bb.sdk.threads
-        .spawn({
-          projectId: linkedBbProjectId,
-          environment,
-          providerId: execution.providerId,
-          model: execution.model,
-          reasoningLevel: execution.reasoningLevel,
-          permissionMode: execution.permissionMode,
-          title,
-          prompt,
-        })
-        .catch((error: unknown) => mapSpawnTargetError(error, preset));
+      const { threadId } = await spawnPresetThread(bb, store, {
+        taskProjectId: task.projectId,
+        presetId: preset.id,
+        title,
+        prompt,
+      });
 
       const taskThread = store.transaction(() => {
         const attached = store.tasks.upsertTaskThread({
           taskId: task.id,
-          threadId: thread.id,
+          threadId,
           presetName: preset.name,
           title,
           liveStatus: "starting",
@@ -368,7 +414,7 @@ export function handlers(
           createSystemComment(store.tasks, {
             taskId: task.id,
             presetName: preset.name,
-            threadId: thread.id,
+            threadId,
             body: `Status changed to In Progress · dispatched to ${preset.name}`,
           });
         }
@@ -376,21 +422,21 @@ export function handlers(
         createSystemComment(store.tasks, {
           taskId: task.id,
           presetName: preset.name,
-          threadId: thread.id,
+          threadId,
           body: `Dispatched to ${preset.name}`,
         });
         return attached;
       });
 
       try {
-        const currentThread = await bb.sdk.threads.get({ threadId: thread.id });
+        const currentThread = await bb.sdk.threads.get({ threadId });
         const currentLiveStatus = taskThreadLiveStatus(currentThread);
         if (currentLiveStatus !== taskThread.liveStatus) {
           store.tasks.updateTaskThreadStatus(taskThread.id, currentLiveStatus);
         }
       } catch (error) {
         bb.log.warn(
-          `Could not read delegated thread ${thread.id} after attach: ${
+          `Could not read delegated thread ${threadId} after attach: ${
             error instanceof Error ? error.message : String(error)
           }`,
         );
@@ -399,7 +445,7 @@ export function handlers(
       publishThreadsChanged(bb, task.id);
       publishTasksChanged(bb, task.id, task.projectId);
       publishCommentsChanged(bb, task.id);
-      return { threadId: thread.id };
+      return { threadId };
     },
 
     async taskThreadsAttach(input) {

@@ -487,6 +487,43 @@ export function registerProviderAwareTasksApi(
       bb.realtime.publish("tasks:changed", { taskId: task.id, projectId: task.projectId });
       return { ok: true, task };
     },
+    async resolveTaskReview(input) {
+      if (store.tasks.getTask(input.taskId)) {
+        return local.resolveTaskReview(input);
+      }
+      const match = await findExternal((task) => task.id === input.taskId);
+      if (!match) throw new Error(`Task not found: ${input.taskId}`);
+      if (match.readOnly) throw new Error("Jira tasks are read-only");
+      if (match.task.status !== "in_review") {
+        return {
+          ok: false,
+          error: {
+            code: "task_review_state_invalid",
+            message: `${match.task.key} is no longer awaiting review`,
+          },
+        };
+      }
+      const body = input.comment.trim();
+      if (body) {
+        if (!match.source.addComment) {
+          throw new Error(`Comments are not supported by ${match.source.id}`);
+        }
+        await match.source.addComment(match.sourceTask.id, body, "You");
+      }
+      const updated = await match.source.update(match.sourceTask.id, {
+        status: sourceStatus(
+          input.decision === "approve" ? "done" : "todo",
+        ),
+      });
+      invalidateExternalTasks(match.projectId);
+      const task = providerTask(match.projectId, updated, match.task.position);
+      bb.realtime.publish("tasks:changed", {
+        taskId: task.id,
+        projectId: task.projectId,
+      });
+      if (body) publishCommentsChanged(bb, task.id, 0);
+      return { ok: true, task };
+    },
     async deleteTask(input) {
       if (store.tasks.getTask(input.taskId)) return local.deleteTask(input);
       const match = await findExternal((task) => task.id === input.taskId);

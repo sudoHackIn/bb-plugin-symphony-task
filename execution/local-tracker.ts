@@ -2,6 +2,7 @@ import type { TasksApiStore } from "../api/index.js";
 import type { ExecutionStore } from "./store.js";
 import type { ExecutionRun } from "./types.js";
 import type {
+  AddCommentInput,
   TrackerAdapter,
   WorkContext,
   WorkItem,
@@ -23,8 +24,7 @@ export class LocalTrackerAdapter implements TrackerAdapter {
 
   async listEligible(input: Parameters<TrackerAdapter["listEligible"]>[0]) {
     return this.executions.listEligibleLocal({
-      projectId: input.policy.projectId,
-      mode: input.policy.mode,
+      policy: input.policy,
       maxAttempts: input.maxAttempts,
       limit: input.limit,
     });
@@ -32,6 +32,20 @@ export class LocalTrackerAdapter implements TrackerAdapter {
 
   async getContext(itemId: string): Promise<WorkContext> {
     const task = requireTask(this.store, itemId);
+    const state: WorkContext["state"] = (() => {
+      switch (task.status) {
+        case "in_progress":
+          return "active";
+        case "in_review":
+          return "review";
+        case "done":
+          return "done";
+        case "canceled":
+          return "canceled";
+        default:
+          return "queued";
+      }
+    })();
     return {
       item: {
         id: task.id,
@@ -39,9 +53,21 @@ export class LocalTrackerAdapter implements TrackerAdapter {
         key: task.key,
         title: task.title,
         version: task.updatedAt,
+        labels: this.store.tasks
+          .listLabelsForTask(task.id)
+          .map((label) => label.id),
       },
       description: task.description,
       tracker: this.kind,
+      state,
+      recentComments: this.store.tasks
+        .listComments(task.id)
+        .slice(-5)
+        .map((comment) => ({
+          author: comment.authorName,
+          body: comment.body,
+          createdAt: comment.createdAt,
+        })),
     };
   }
 
@@ -66,12 +92,17 @@ export class LocalTrackerAdapter implements TrackerAdapter {
     this.executions.renew(runId);
   }
 
-  async release(runId: string, reason?: string): Promise<void> {
-    this.executions.updateRunStatus(runId, "failed", reason ?? null);
+  async release(
+    runId: string,
+    input: { resetToQueued: boolean; reason?: string },
+  ): Promise<void> {
     const run = this.executions.getRun(runId);
     if (!run) return;
     const task = this.store.tasks.getTask(run.workItemId);
-    if (task?.status === "in_progress") {
+    if (
+      input.resetToQueued &&
+      (task?.status === "in_progress" || task?.status === "in_review")
+    ) {
       this.store.tasks.updateTask(task.id, { status: "todo" });
     }
   }
@@ -84,11 +115,18 @@ export class LocalTrackerAdapter implements TrackerAdapter {
     }
   }
 
-  async addComment(itemId: string, body: string): Promise<void> {
+  async addComment(
+    itemId: string,
+    body: string,
+    input: AddCommentInput,
+  ): Promise<void> {
     this.store.tasks.createComment({
       taskId: itemId,
-      kind: "system",
-      authorName: "Symphony Task",
+      kind: input.kind,
+      authorName:
+        input.kind === "agent" ? "Execution agent" : "Symphony Task",
+      presetName: input.kind === "agent" ? "Execution engine" : null,
+      threadId: input.threadId ?? null,
       body,
       notifiedCount: 0,
     });

@@ -57,7 +57,17 @@ export interface Project {
   color: string;
   folderId: string | null;
   linkedBbProjectId: string | null;
+  workflowId: string | null;
   createdAt: string;
+}
+
+export interface Workflow {
+  id: string;
+  name: string;
+  markdown: string;
+  revision: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Task {
@@ -164,6 +174,18 @@ export interface UpdateProjectInput {
   color?: string;
   folderId?: string | null;
   linkedBbProjectId?: string | null;
+  workflowId?: string | null;
+}
+
+export interface CreateWorkflowInput {
+  id?: string;
+  name: string;
+  markdown: string;
+}
+
+export interface UpdateWorkflowInput {
+  name?: string;
+  markdown?: string;
 }
 
 export interface CreateTaskInput {

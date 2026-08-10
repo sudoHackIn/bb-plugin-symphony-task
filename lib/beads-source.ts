@@ -14,6 +14,14 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
+export const BEADS_REVIEW_LABEL = "symphony:review";
+export const BEADS_CLAIM_METADATA = {
+  candidate: "symphony.candidate",
+  claimId: "symphony.claim_id",
+  expiresAt: "symphony.expires_at",
+  threadId: "symphony.thread_id",
+} as const;
+
 export async function isBeadsCliAvailable(executable: string): Promise<boolean> {
   try {
     await execFileAsync(executable, ["--version"], { timeout: 5_000 });
@@ -52,6 +60,7 @@ interface BeadsIssue {
   external_ref?: string;
   parent?: string;
   blocked_by?: string[];
+  metadata?: Record<string, unknown>;
   updated_at?: string;
 }
 
@@ -82,7 +91,13 @@ const PRIORITY_TO_BEADS: Record<TaskPriority, string> = {
   none: "P4",
 };
 
-function normalizeStatus(status: string | undefined): TaskStatus {
+function normalizeStatus(
+  status: string | undefined,
+  labels: readonly string[] = [],
+): TaskStatus {
+  if (status === "open" && labels.includes(BEADS_REVIEW_LABEL)) {
+    return "in_review";
+  }
   switch (status) {
     case "in_progress":
       return "in_progress";
@@ -100,6 +115,8 @@ function beadsStatus(status: TaskStatus): string {
   switch (status) {
     case "in_progress":
       return "in_progress";
+    case "in_review":
+      return "open";
     case "blocked":
       return "blocked";
     case "done":
@@ -119,7 +136,7 @@ function normalizeIssue(
     key: issue.id,
     title: issue.title,
     description: issue.description ?? "",
-    status: normalizeStatus(issue.status),
+    status: normalizeStatus(issue.status, issue.labels),
     nativeStatus: issue.status ?? "open",
     priority: PRIORITY_FROM_BEADS[issue.priority ?? 4] ?? "none",
     type: issue.issue_type ?? "task",
@@ -145,6 +162,22 @@ function parseIssue(stdout: string): BeadsIssue {
   if (!issue || typeof issue !== "object")
     throw new Error("Beads returned an invalid issue");
   return issue as BeadsIssue;
+}
+
+function metadataString(issue: BeadsIssue, key: string): string | null {
+  const value = issue.metadata?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+export interface BeadsClaimInput {
+  issueId: string;
+  owner: string;
+  claimId: string;
+  expiresAt: string;
+}
+
+export interface BeadsClaimMutation extends BeadsClaimInput {
+  threadId?: string | null;
 }
 
 function normalizeComment(comment: BeadsComment): UnifiedComment {
@@ -207,6 +240,26 @@ export class BeadsTaskSource implements TaskSource {
     } catch (error) {
       const detail = error as Error & { stderr?: string };
       throw new Error(detail.stderr?.trim() || detail.message);
+    }
+  }
+
+  private async clearCandidate(issueId: string, claimId: string): Promise<void> {
+    try {
+      const current = parseIssue(await this.run(["show", issueId, "--json"]));
+      if (
+        metadataString(current, BEADS_CLAIM_METADATA.candidate) !== claimId
+      ) {
+        return;
+      }
+      await this.run([
+        "update",
+        issueId,
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.candidate,
+        "--json",
+      ]);
+    } catch {
+      // The next eligibility pass can safely overwrite a stale candidate.
     }
   }
 
@@ -295,6 +348,211 @@ export class BeadsTaskSource implements TaskSource {
     );
   }
 
+  async get(id: string): Promise<UnifiedTask> {
+    return normalizeIssue(parseIssue(await this.run(["show", id, "--json"])));
+  }
+
+  async listReady(): Promise<UnifiedTask[]> {
+    return parseIssues(
+      await this.run([
+        "ready",
+        "--limit",
+        "0",
+        "--exclude-label",
+        BEADS_REVIEW_LABEL,
+        "--json",
+      ]),
+    ).map((issue) => normalizeIssue(issue));
+  }
+
+  async recoverOwnedClaims(
+    owner: string,
+    activeClaimIds: ReadonlySet<string>,
+  ): Promise<number> {
+    const issues = parseIssues(
+      await this.run(["list", "--all", "--flat", "--limit", "0", "--json"]),
+    );
+    let released = 0;
+    for (const issue of issues) {
+      if (issue.assignee !== owner) continue;
+      const claimId = metadataString(issue, BEADS_CLAIM_METADATA.claimId);
+      if (claimId && activeClaimIds.has(claimId)) continue;
+      const args = [
+        "update",
+        issue.id,
+        "--assignee",
+        "",
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.candidate,
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.claimId,
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.expiresAt,
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.threadId,
+      ];
+      if (!(issue.labels ?? []).includes(BEADS_REVIEW_LABEL)) {
+        args.push("--status", "open");
+      }
+      args.push("--actor", owner, "--json");
+      await this.run(args);
+      released += 1;
+    }
+    return released;
+  }
+
+  async claim(input: BeadsClaimInput): Promise<UnifiedTask | null> {
+    await this.run([
+      "update",
+      input.issueId,
+      "--set-metadata",
+      `${BEADS_CLAIM_METADATA.candidate}=${input.claimId}`,
+      "--json",
+    ]);
+    let claimed: BeadsIssue | null = null;
+    try {
+      const candidates = parseIssues(
+        await this.run([
+        "ready",
+        "--claim",
+        "--metadata-field",
+        `${BEADS_CLAIM_METADATA.candidate}=${input.claimId}`,
+        "--limit",
+        "1",
+        "--actor",
+        input.owner,
+        "--json",
+        ]),
+      );
+      claimed = candidates.find((issue) => issue.id === input.issueId) ?? null;
+    } catch (error) {
+      if (error instanceof Error && /already claimed by/u.test(error.message)) {
+        claimed = null;
+      } else {
+        await this.clearCandidate(input.issueId, input.claimId);
+        throw error;
+      }
+    }
+
+    if (!claimed) {
+      await this.clearCandidate(input.issueId, input.claimId);
+      return null;
+    }
+
+    try {
+      const stdout = await this.run([
+        "update",
+        input.issueId,
+        "--set-metadata",
+        `${BEADS_CLAIM_METADATA.claimId}=${input.claimId}`,
+        "--set-metadata",
+        `${BEADS_CLAIM_METADATA.expiresAt}=${input.expiresAt}`,
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.candidate,
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.threadId,
+        "--remove-label",
+        BEADS_REVIEW_LABEL,
+        "--actor",
+        input.owner,
+        "--json",
+      ]);
+      return normalizeIssue(parseIssue(stdout));
+    } catch (error) {
+      await this.run([
+        "update",
+        input.issueId,
+        "--assignee",
+        "",
+        "--status",
+        "open",
+        "--unset-metadata",
+        BEADS_CLAIM_METADATA.candidate,
+        "--actor",
+        input.owner,
+        "--json",
+      ]).catch(() => {});
+      throw error;
+    }
+  }
+
+  async renewClaim(input: BeadsClaimMutation): Promise<boolean> {
+    const issue = parseIssue(await this.run(["show", input.issueId, "--json"]));
+    if (
+      issue.assignee !== input.owner ||
+      metadataString(issue, BEADS_CLAIM_METADATA.claimId) !== input.claimId
+    ) {
+      return false;
+    }
+    const args = [
+      "update",
+      input.issueId,
+      "--set-metadata",
+      `${BEADS_CLAIM_METADATA.expiresAt}=${input.expiresAt}`,
+    ];
+    if (input.threadId !== undefined) {
+      if (input.threadId === null) {
+        args.push("--unset-metadata", BEADS_CLAIM_METADATA.threadId);
+      } else {
+        args.push(
+          "--set-metadata",
+          `${BEADS_CLAIM_METADATA.threadId}=${input.threadId}`,
+        );
+      }
+    }
+    args.push("--actor", input.owner, "--json");
+    await this.run(args);
+    return true;
+  }
+
+  async releaseClaim(
+    input: BeadsClaimInput & { resetToQueued: boolean },
+  ): Promise<boolean> {
+    const issue = parseIssue(await this.run(["show", input.issueId, "--json"]));
+    if (
+      issue.assignee !== input.owner ||
+      metadataString(issue, BEADS_CLAIM_METADATA.claimId) !== input.claimId
+    ) {
+      return false;
+    }
+    const args = [
+      "update",
+      input.issueId,
+      "--assignee",
+      "",
+      "--unset-metadata",
+      BEADS_CLAIM_METADATA.candidate,
+      "--unset-metadata",
+      BEADS_CLAIM_METADATA.claimId,
+      "--unset-metadata",
+      BEADS_CLAIM_METADATA.expiresAt,
+      "--unset-metadata",
+      BEADS_CLAIM_METADATA.threadId,
+    ];
+    if (input.resetToQueued) {
+      args.push(
+        "--status",
+        "open",
+        "--remove-label",
+        BEADS_REVIEW_LABEL,
+      );
+    }
+    args.push("--actor", input.owner, "--json");
+    await this.run(args);
+    return true;
+  }
+
+  async transitionExecution(id: string, state: TaskStatus): Promise<UnifiedTask> {
+    const args = ["update", id, "--status", beadsStatus(state)];
+    if (state === "in_review") {
+      args.push("--add-label", BEADS_REVIEW_LABEL);
+    } else {
+      args.push("--remove-label", BEADS_REVIEW_LABEL);
+    }
+    args.push("--json");
+    return normalizeIssue(parseIssue(await this.run(args)));
+  }
+
   async create(input: CreateTaskInput): Promise<UnifiedTask> {
     const args = [
       "create",
@@ -322,6 +580,13 @@ export class BeadsTaskSource implements TaskSource {
       args.push("--status", input.nativeStatus);
     else if (input.status !== undefined)
       args.push("--status", beadsStatus(input.status));
+    if (input.nativeStatus !== undefined || input.status !== undefined) {
+      if (input.status === "in_review") {
+        args.push("--add-label", BEADS_REVIEW_LABEL);
+      } else {
+        args.push("--remove-label", BEADS_REVIEW_LABEL);
+      }
+    }
     if (input.priority !== undefined)
       args.push("--priority", PRIORITY_TO_BEADS[input.priority]);
     if (input.parentId !== undefined)

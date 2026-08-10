@@ -1,6 +1,9 @@
 export const EXECUTION_PROJECT_MODES = ["off", "opt_in", "all_todo"] as const;
 export type ExecutionProjectMode = (typeof EXECUTION_PROJECT_MODES)[number];
 
+export const EXECUTION_LABEL_MATCHES = ["any", "all"] as const;
+export type ExecutionLabelMatch = (typeof EXECUTION_LABEL_MATCHES)[number];
+
 export const TASK_EXECUTION_POLICIES = [
   "inherit",
   "enabled",
@@ -35,6 +38,8 @@ export interface ProjectExecutionPolicy {
   presetId: string | null;
   maxWorkers: number | null;
   tokenBudget: number | null;
+  labelFilter: string[];
+  labelMatch: ExecutionLabelMatch;
   updatedAt: string;
 }
 
@@ -75,6 +80,7 @@ export interface EligibleWorkItem {
   key: string;
   title: string;
   version: string;
+  labels: string[];
   policy: TaskExecutionPolicy;
   latestStatus: ExecutionRunStatus | null;
   latestAttempt: number | null;

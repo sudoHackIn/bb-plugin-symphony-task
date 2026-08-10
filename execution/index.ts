@@ -257,7 +257,10 @@ export function registerExecution(
       publishTaskChanged(bb, run.workItemId, run.projectId);
       publishExecutionChanged(bb);
     } catch (error) {
-      await local.release(run.id, `Could not start worker: ${errorMessage(error)}`);
+      await local.release(run.id, {
+        resetToQueued: true,
+        reason: `Could not start worker: ${errorMessage(error)}`,
+      });
       publishTaskChanged(bb, run.workItemId, run.projectId);
       publishExecutionChanged(bb);
     }
@@ -343,6 +346,10 @@ export function registerExecution(
             : source === "automatic"
               ? "Choose Local Tasks explicitly before enabling autonomous execution."
               : "Jira execution claims are not implemented yet.",
+          labels: store.tasks.listLabels(project.id).map((label) => ({
+            value: label.id,
+            name: label.name,
+          })),
           policy:
             policies.get(project.id) ??
             executions.getProjectPolicy(project.id),
@@ -364,9 +371,11 @@ export function registerExecution(
         .filter((task) => supportedProjects.has(task.projectId))
         .map((task) => ({
           id: task.id,
+          tracker: "local" as const,
           projectId: task.projectId,
           key: task.key,
           title: task.title,
+          labels: task.labels,
           policy: task.policy,
           latestStatus: task.latestStatus,
           latestAttempt: task.latestAttempt,

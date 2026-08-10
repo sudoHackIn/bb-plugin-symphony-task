@@ -412,6 +412,28 @@ const MIGRATIONS = [
       FOREIGN KEY (workflow_id, workflow_revision) REFERENCES workflow_definitions(id, revision)
     );
   `,
+  `
+    ALTER TABLE project_execution_policies
+      ADD COLUMN label_filter TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE project_execution_policies
+      ADD COLUMN label_match TEXT NOT NULL DEFAULT 'any'
+      CHECK (label_match IN ('any', 'all'));
+  `,
+  `
+    CREATE TABLE workflows (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+      markdown TEXT NOT NULL,
+      revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    ALTER TABLE projects
+      ADD COLUMN workflow_id TEXT REFERENCES workflows(id) ON DELETE SET NULL;
+
+    CREATE INDEX idx_projects_workflow ON projects(workflow_id);
+  `,
 ] as const;
 
 export function initializeTasksSchema(db: PluginDatabase): void {

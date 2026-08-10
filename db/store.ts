@@ -18,6 +18,7 @@ import type {
   CreatePresetInput,
   CreateProjectInput,
   CreateTaskInput,
+  CreateWorkflowInput,
   Folder,
   Label,
   ListTasksFilters,
@@ -39,7 +40,9 @@ import type {
   UpdateTaskInput,
   UpdateTaskPositionInput,
   UpdateTaskThreadInput,
+  UpdateWorkflowInput,
   UpsertTaskThreadInput,
+  Workflow,
 } from "./types";
 
 type PluginDatabase = ReturnType<BbPluginApi["storage"]["database"]>;
@@ -67,7 +70,17 @@ interface ProjectRow {
   color: string;
   folder_id: string | null;
   linked_bb_project_id: string | null;
+  workflow_id: string | null;
   created_at: string;
+}
+
+interface WorkflowRow {
+  id: string;
+  name: string;
+  markdown: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
 }
 
 interface TaskRow {
@@ -354,6 +367,7 @@ function projectFromRow(row: ProjectRow): Project {
     color: row.color,
     folderId: row.folder_id,
     linkedBbProjectId: row.linked_bb_project_id,
+    workflowId: row.workflow_id,
     createdAt: row.created_at,
   };
 }
@@ -447,6 +461,17 @@ function presetFromRow(row: PresetRow): Preset {
   };
 }
 
+function workflowFromRow(row: WorkflowRow): Workflow {
+  return {
+    id: row.id,
+    name: row.name,
+    markdown: row.markdown,
+    revision: row.revision,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function validatePresetEnvironment(input: {
   environmentKind: PresetEnvironmentKind;
   baseBranch: string | null;
@@ -513,6 +538,9 @@ export function createTasksStore(db: PluginDatabase) {
   );
   const getPresetRow = db.prepare<[string], PresetRow>(
     "SELECT * FROM presets WHERE id = ?",
+  );
+  const getWorkflowRow = db.prepare<[string], WorkflowRow>(
+    "SELECT * FROM workflows WHERE id = ?",
   );
 
   function getFolder(id: string): Folder | undefined {
@@ -664,10 +692,16 @@ export function createTasksStore(db: PluginDatabase) {
     const folderId =
       input.folderId === undefined ? current.folderId : input.folderId;
     if (folderId !== null) requireFolder(folderId);
-    db.prepare<[string, string, string, string | null, string | null, string]>(
+    const workflowId =
+      input.workflowId === undefined ? current.workflowId : input.workflowId;
+    if (workflowId !== null) requireWorkflow(workflowId);
+    db.prepare<
+      [string, string, string, string | null, string | null, string | null, string]
+    >(
       `
       UPDATE projects
-      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?
+      SET name = ?, prefix = ?, color = ?, folder_id = ?, linked_bb_project_id = ?,
+          workflow_id = ?
       WHERE id = ?
     `,
     ).run(
@@ -684,6 +718,7 @@ export function createTasksStore(db: PluginDatabase) {
       input.linkedBbProjectId === undefined
         ? current.linkedBbProjectId
         : validateLinkedBbProjectId(input.linkedBbProjectId),
+      workflowId,
       id,
     );
     return requireProject(id);
@@ -1826,6 +1861,72 @@ export function createTasksStore(db: PluginDatabase) {
     );
   }
 
+  function getWorkflow(id: string): Workflow | undefined {
+    const row = getWorkflowRow.get(id);
+    return row ? workflowFromRow(row) : undefined;
+  }
+
+  function requireWorkflow(id: string): Workflow {
+    const workflow = getWorkflow(id);
+    if (!workflow) throw new Error(`Workflow not found: ${id}`);
+    return workflow;
+  }
+
+  function createWorkflow(input: CreateWorkflowInput): Workflow {
+    const id = createOrValidateUlid(input.id);
+    const now = nowIso();
+    db.prepare<[string, string, string, string, string]>(
+      `
+        INSERT INTO workflows (id, name, markdown, revision, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, ?)
+      `,
+    ).run(
+      id,
+      requireNonEmpty(input.name, "Workflow name"),
+      requireNonEmpty(input.markdown, "Workflow markdown"),
+      now,
+      now,
+    );
+    return requireWorkflow(id);
+  }
+
+  function listWorkflows(): Workflow[] {
+    return db
+      .prepare<[], WorkflowRow>(
+        "SELECT * FROM workflows ORDER BY name COLLATE NOCASE, id",
+      )
+      .all()
+      .map(workflowFromRow);
+  }
+
+  function updateWorkflow(id: string, input: UpdateWorkflowInput): Workflow {
+    const current = requireWorkflow(id);
+    db.prepare<[string, string, string, string]>(
+      `
+        UPDATE workflows SET
+          name = ?, markdown = ?, revision = revision + 1, updated_at = ?
+        WHERE id = ?
+      `,
+    ).run(
+      input.name === undefined
+        ? current.name
+        : requireNonEmpty(input.name, "Workflow name"),
+      input.markdown === undefined
+        ? current.markdown
+        : requireNonEmpty(input.markdown, "Workflow markdown"),
+      nowIso(),
+      id,
+    );
+    return requireWorkflow(id);
+  }
+
+  function deleteWorkflow(id: string): boolean {
+    return (
+      db.prepare<[string]>("DELETE FROM workflows WHERE id = ?").run(id)
+        .changes > 0
+    );
+  }
+
   return {
     createFolder,
     getFolder,
@@ -1881,6 +1982,11 @@ export function createTasksStore(db: PluginDatabase) {
     listPresets,
     updatePreset,
     deletePreset,
+    createWorkflow,
+    getWorkflow,
+    listWorkflows,
+    updateWorkflow,
+    deleteWorkflow,
   };
 }
 
