@@ -451,12 +451,44 @@ export function initializeTasksSchema(db: PluginDatabase): void {
   const recordVersion = db.prepare<[number, string]>(
     "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
   );
+  const hasColumn = (table: string, column: string): boolean =>
+    db
+      .prepare<[string], { found: number }>(
+        `SELECT 1 AS found FROM pragma_table_info('${table}') WHERE name = ?`,
+      )
+      .get(column) !== undefined;
 
   const migrate = db.transaction(() => {
     for (const [index, sql] of MIGRATIONS.entries()) {
       const version = index + 1;
       if (hasVersion.get(version)) continue;
-      db.exec(sql);
+      // Versions 10 and 11 existed in an early main checkout that could add
+      // their columns before its surrounding migration transaction aborted.
+      // Repair those partial databases by applying each additive operation
+      // only when missing, then record the original migration version.
+      if (version === 10) {
+        if (!hasColumn("project_execution_policies", "label_filter")) {
+          db.exec("ALTER TABLE project_execution_policies ADD COLUMN label_filter TEXT NOT NULL DEFAULT '[]'");
+        }
+        if (!hasColumn("project_execution_policies", "label_match")) {
+          db.exec("ALTER TABLE project_execution_policies ADD COLUMN label_match TEXT NOT NULL DEFAULT 'any' CHECK (label_match IN ('any', 'all'))");
+        }
+      } else if (version === 11) {
+        db.exec(`CREATE TABLE IF NOT EXISTS workflows (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+          markdown TEXT NOT NULL,
+          revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )`);
+        if (!hasColumn("projects", "workflow_id")) {
+          db.exec("ALTER TABLE projects ADD COLUMN workflow_id TEXT REFERENCES workflows(id) ON DELETE SET NULL");
+        }
+        db.exec("CREATE INDEX IF NOT EXISTS idx_projects_workflow ON projects(workflow_id)");
+      } else {
+        db.exec(sql);
+      }
       recordVersion.run(version, new Date().toISOString());
     }
   });
