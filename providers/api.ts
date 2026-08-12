@@ -38,6 +38,7 @@ import type { WorkflowBeadsBridge } from "../workflows/index.js";
 
 const TARGETS_PREFIX = "task-targets:";
 const EXTERNAL_THREADS_PREFIX = "external-task-threads:";
+const WORKFLOW_CHECKPOINT_METADATA = "symphony.workflow_checkpoint";
 const BEADS_LINK_TYPE_SET = new Set<string>(BEADS_LINK_TYPES);
 
 interface ExternalThreadRecord extends TaskThread {
@@ -1081,6 +1082,20 @@ export function registerProviderAwareTasksApi(
         taskThread,
       ]);
       bb.realtime.publish("threads:changed", { taskId });
+      bb.realtime.publish("tasks:changed", { taskId, projectId });
+    },
+    async loadCheckpoint(taskId, projectId) {
+      const match = await findExternalInProject(projectId, (task) => task.id === taskId);
+      if (!match || match.source.id !== "beads") throw new Error("Beads task not found");
+      if (!match.source.getMetadata) throw new Error("This Beads source does not support workflow checkpoints");
+      return match.source.getMetadata(match.sourceTask.id, WORKFLOW_CHECKPOINT_METADATA);
+    },
+    async saveCheckpoint(taskId, projectId, checkpoint) {
+      const match = await findExternalInProject(projectId, (task) => task.id === taskId);
+      if (!match || match.source.id !== "beads") throw new Error("Beads task not found");
+      if (!match.source.setMetadata) throw new Error("This Beads source does not support workflow checkpoints");
+      await match.source.setMetadata(match.sourceTask.id, WORKFLOW_CHECKPOINT_METADATA, checkpoint);
+      invalidateExternalTasks(projectId);
       bb.realtime.publish("tasks:changed", { taskId, projectId });
     },
   };

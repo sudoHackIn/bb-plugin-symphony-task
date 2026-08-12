@@ -39,13 +39,21 @@ export interface OpenSpecArtifact extends ArtifactReady {
   approvedDigest: string | null;
 }
 
+export interface OpenSpecPresetIds {
+  drafting: string;
+  apply: string;
+  review: string;
+}
+
 export interface OpenSpecState {
   attempts: Record<string, number>;
   artifacts: Partial<Record<OpenSpecArtifact["stage"], OpenSpecArtifact>>;
   activeThreadId: string | null;
   lastHumanComment: string | null;
   pendingReview: ArtifactReady | null;
+  /** @deprecated Retained to resume workflow runs created before role presets. */
   presetId: string | null;
+  presetIds: OpenSpecPresetIds | null;
   implementation: ArtifactReady | null;
   agentReview: { passed: boolean; findings: string[]; evidence: string[] } | null;
   workflowMarkdown: string;
@@ -65,6 +73,7 @@ export function initialOpenSpecState(): OpenSpecState {
     lastHumanComment: null,
     pendingReview: null,
     presetId: null,
+    presetIds: null,
     implementation: null,
     agentReview: null,
     workflowMarkdown: "",
@@ -106,7 +115,7 @@ export function reduceOpenSpec(
   event:
     | { type: "stage_started"; threadId: string }
     | { type: "artifact_ready"; artifact: ArtifactReady }
-    | { type: "agent_review"; passed: boolean; findings: string[]; evidence: string[] }
+    | { type: "agent_review"; passed: boolean; findings: string[]; evidence: string[]; maxImplementationAttempts: number }
     | { type: "approved"; comment: string }
     | { type: "changes_requested"; comment: string },
 ): OpenSpecSnapshot {
@@ -142,8 +151,13 @@ export function reduceOpenSpec(
       state.pendingReview = state.implementation;
       return { stage: "FINAL_REVIEW", status: "waiting_human", state };
     }
-    state.attempts.implementation = (state.attempts.implementation ?? 1) + 1;
     state.lastHumanComment = event.findings.join("\n");
+    const currentAttempt = state.attempts.implementation ?? 1;
+    if (currentAttempt >= event.maxImplementationAttempts) {
+      state.pendingReview = state.implementation;
+      return { stage: "FINAL_REVIEW", status: "waiting_human", state };
+    }
+    state.attempts.implementation = currentAttempt + 1;
     return { stage: "IMPLEMENTING", status: "running", state };
   }
   if (event.type === "approved") {

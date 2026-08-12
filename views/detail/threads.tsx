@@ -36,6 +36,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Icon } from "@/components/ui/icon";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "../../components/confirm-dialog.js";
@@ -229,6 +236,11 @@ export function DispatchControl({
   const [dispatching, setDispatching] = useState(false);
   const [lastPresetId, setLastPresetId] = useState(loadLastPresetId);
   const [pendingPreset, setPendingPreset] = useState<Preset | null>(null);
+  const [workflowPresets, setWorkflowPresets] = useState<{
+    drafting: string;
+    apply: string;
+    review: string;
+  } | null>(null);
   const [instructions, setInstructions] = useState("");
   // Keyed remount resets the create dialog's draft per open.
   const [createDialogKey, setCreateDialogKey] = useState<number | null>(null);
@@ -249,9 +261,10 @@ export function DispatchControl({
       setDispatching(false);
     }
   };
-  const startWorkflow = async (preset: Preset) => {
+  const startWorkflow = async () => {
+    if (!workflowPresets) return;
     setDispatching(true);
-    try { await workflowRpc.call("startOpenSpecWorkflow", { taskId: task.id, projectId: task.projectId, presetId: preset.id }); }
+    try { await workflowRpc.call("startOpenSpecWorkflow", { taskId: task.id, projectId: task.projectId, presetIds: workflowPresets }); setWorkflowPresets(null); }
     catch (error) { onError(error instanceof Error ? error.message : String(error)); }
     finally { setDispatching(false); }
   };
@@ -355,7 +368,7 @@ export function DispatchControl({
                 ) : null}
               </DropdownMenuItem>
             ))}
-            {task.sourceId === "beads" ? <><DropdownMenuLabel>Workflow</DropdownMenuLabel><DropdownMenuItem onSelect={() => { if (current) void startWorkflow(current); }}>Start OpenSpec workflow</DropdownMenuItem></> : null}
+            {task.sourceId === "beads" ? <><DropdownMenuLabel>Workflow</DropdownMenuLabel><DropdownMenuItem onSelect={() => { if (current) setWorkflowPresets({ drafting: current.id, apply: current.id, review: current.id }); }}>Configure and start OpenSpec</DropdownMenuItem></> : null}
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -391,6 +404,50 @@ export function DispatchControl({
             </Button>
             <Button disabled={dispatching} onClick={() => void dispatch()}>
               {dispatching ? "Dispatching…" : "Dispatch"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={workflowPresets !== null}
+        onOpenChange={(open) => { if (!open && !dispatching) setWorkflowPresets(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Configure OpenSpec presets</DialogTitle>
+            <DialogDescription>
+              Each role uses its selected preset's model, reasoning, permissions, and instructions.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            {([
+              ["drafting", "Explore, propose, design, and tasks"],
+              ["apply", "OpenSpec apply"],
+              ["review", "Agent review"],
+            ] as const).map(([role, label]) => (
+              <label key={role} className="grid gap-1.5 text-sm font-medium">
+                {label}
+                <Select
+                  value={workflowPresets?.[role]}
+                  onValueChange={(value) => setWorkflowPresets((current) => current ? { ...current, [role]: value } : current)}
+                  disabled={dispatching}
+                >
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {(presets ?? []).map((preset) => (
+                      <SelectItem key={preset.id} value={preset.id}>
+                        {preset.name} · {preset.modelId}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" disabled={dispatching} onClick={() => setWorkflowPresets(null)}>Cancel</Button>
+            <Button disabled={dispatching || !workflowPresets} onClick={() => void startWorkflow()}>
+              {dispatching ? "Starting…" : "Start OpenSpec"}
             </Button>
           </DialogFooter>
         </DialogContent>

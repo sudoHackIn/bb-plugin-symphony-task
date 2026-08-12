@@ -97,6 +97,9 @@ export interface TaskSource {
     body: string,
     author: string,
   ): Promise<UnifiedComment>;
+  /** Optional provider-native metadata used for compact machine checkpoints. */
+  getMetadata?(id: string, key: string): Promise<string | null>;
+  setMetadata?(id: string, key: string, value: string | null): Promise<void>;
   listLinks?(id: string): Promise<UnifiedTaskLink[]>;
   addLink?(id: string, linkedId: string, type: TaskLinkType): Promise<void>;
   removeLink?(

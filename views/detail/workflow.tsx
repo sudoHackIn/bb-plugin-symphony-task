@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Markdown, useBbNavigate, useRealtime, useRpc } from "@bb/plugin-sdk/app";
 import type { Task } from "../../shared/contract.js";
 import type { WorkflowRpcContract } from "../../workflows/contract.js";
+import type { WorkflowCheckpoint } from "../../workflows/contract.js";
 import type { OpenSpecRunView } from "../../workflows/index.js";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -67,14 +68,35 @@ function WorkflowProgress({ run }: { run: OpenSpecRunView }) {
 export function WorkflowPanel({ task, onError }: { task: Task; onError: (message: string) => void }) {
   const rpc = useRpc<WorkflowRpcContract>();
   const [current, setCurrent] = useState<OpenSpecRunView | null | undefined>(undefined);
+  const [checkpoint, setCheckpoint] = useState<WorkflowCheckpoint | null | undefined>(undefined);
   const refresh = useCallback(() => {
-    void rpc.call("getWorkflowRun", { taskId: task.id }).then((result) => setCurrent(result.run), (error: unknown) => onError(error instanceof Error ? error.message : String(error)));
-  }, [rpc, task.id, onError]);
+    void Promise.all([
+      rpc.call("getWorkflowRun", { taskId: task.id }),
+      task.sourceId === "beads" ? rpc.call("getWorkflowCheckpoint", { taskId: task.id, projectId: task.projectId }) : Promise.resolve({ checkpoint: null }),
+    ]).then(([run, saved]) => { setCurrent(run.run); setCheckpoint(saved.checkpoint); }, (error: unknown) => onError(error instanceof Error ? error.message : String(error)));
+  }, [rpc, task.id, task.projectId, task.sourceId, onError]);
   useEffect(() => { refresh(); }, [refresh]);
   useRealtime("workflow:changed", refresh);
   const [comment, setComment] = useState("");
   const [preview, setPreview] = useState<{ path: string; markdown: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const exportCheckpoint = async () => {
+    if (!current) return;
+    setBusy(true);
+    try {
+      const result = await rpc.call("exportWorkflowCheckpoint", { runId: current.id, expectedVersion: current.version });
+      setCheckpoint(result.checkpoint);
+    } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
+  const resumeCheckpoint = async () => {
+    setBusy(true);
+    try {
+      const result = await rpc.call("resumeWorkflowCheckpoint", { taskId: task.id, projectId: task.projectId });
+      setCurrent(result.run);
+    } catch (error) { onError(error instanceof Error ? error.message : String(error)); }
+    finally { setBusy(false); }
+  };
   const resolve = async (decision: "approve" | "request_changes") => {
     if (!current) return;
     if (decision === "request_changes" && !comment.trim()) return onError("A comment is required when requesting changes");
@@ -88,12 +110,19 @@ export function WorkflowPanel({ task, onError }: { task: Task; onError: (message
     try { const { markdown } = await rpc.call("getWorkflowArtifactContent", { runId: current.id, path }); setPreview({ path, markdown }); }
     catch (error) { onError(error instanceof Error ? error.message : String(error)); }
   };
-  if (current === undefined) return null;
+  if (current === undefined || checkpoint === undefined) return null;
+  if (!current && !checkpoint) return null;
+  if (!current && checkpoint) return <section className="mt-6 rounded-md border border-border bg-card p-3" aria-label="Transferred OpenSpec workflow">
+    <div className="flex items-center gap-2 text-sm font-medium"><Icon name="GitBranch" className="size-4 text-muted-foreground" /><span className="flex-1">Transferred OpenSpec checkpoint</span></div>
+    <p className="mt-2 text-xs text-muted-foreground">{stageName(checkpoint.stage)} · {checkpoint.git.branch ?? "detached"} · {checkpoint.git.commit.slice(0, 12)}</p>
+    <p className="mt-2 text-sm">{checkpoint.pendingReview.summary}</p>
+    <Button className="mt-3" size="sm" disabled={busy} onClick={() => void resumeCheckpoint()}>{busy ? "Resuming…" : "Resume workflow"}</Button>
+  </section>;
   if (!current) return null;
   const review = current.status === "waiting_human" && current.pendingReview;
   return <><section className="mt-6" aria-label="OpenSpec workflow">
     <WorkflowProgress run={current} />
-    <p className="mt-2 text-xs text-muted-foreground">Stage: {stageName(current.stage)} · attempt {current.attempt}</p>
+    <div className="mt-2 flex items-center gap-2"><p className="flex-1 text-xs text-muted-foreground">Stage: {stageName(current.stage)} · attempt {current.attempt}</p>{current.status === "waiting_human" && task.sourceId === "beads" ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void exportCheckpoint()}>{checkpoint?.stage === current.stage ? "Update checkpoint" : "Export checkpoint"}</Button> : null}</div>
     {current.stage === "FINAL_REVIEW" ? <div className="mt-3 space-y-2 text-xs"><div className="font-medium">Evidence package</div>{current.approvedArtifacts.map((artifact) => <div key={artifact.stage} className="rounded bg-muted p-2"><span className="font-medium">{artifact.stage}</span> · {artifact.path}<br /><span className="font-mono text-muted-foreground">{artifact.approvedDigest}</span></div>)}{current.agentReview ? <div className="rounded bg-muted p-2"><span className="font-medium">Agent review: {current.agentReview.passed ? "PASS" : "NEEDS CHANGES"}</span>{current.agentReview.findings.map((finding) => <div key={finding}>• {finding}</div>)}{current.agentReview.evidence.map((item) => <div key={item} className="text-muted-foreground">{item}</div>)}</div> : null}</div> : null}
     {review ? <div className="mt-3 space-y-2 text-sm"><button type="button" className="block max-w-full truncate text-primary underline" onClick={() => void openArtifact(review.path)}>{review.path}</button><div className="font-mono text-xs text-muted-foreground">{review.digest}</div><p>{review.summary}</p>{review.openQuestions.length ? <p className="text-xs text-muted-foreground">Open questions: {review.openQuestions.join(" · ")}</p> : null}<textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Comment (required for changes)" className="min-h-16 w-full rounded border border-input bg-background p-2 text-sm" /><div className="flex gap-2"><Button size="sm" disabled={busy} onClick={() => void resolve("approve")}>Approve</Button><Button size="sm" variant="outline" disabled={busy} onClick={() => void resolve("request_changes")}>Request changes</Button></div></div> : null}
   </section><Dialog open={preview !== null} onOpenChange={(open) => { if (!open) setPreview(null); }}><DialogContent className="fixed inset-y-0 right-0 left-auto h-dvh w-[min(42rem,94vw)] max-w-none translate-x-0 translate-y-0 grid-rows-[auto_minmax(0,1fr)] gap-0 rounded-none p-0"><DialogHeader className="border-b px-5 py-4 pr-12"><DialogTitle className="truncate">{preview?.path}</DialogTitle></DialogHeader>{preview ? <div className="min-h-0 overflow-y-auto px-6 py-5"><Markdown content={preview.markdown} /></div> : null}</DialogContent></Dialog></>;

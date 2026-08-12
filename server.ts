@@ -52,11 +52,22 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Jira API token",
       secret: true,
     },
+    maxImplementationAttempts: {
+      type: "string",
+      label: "Maximum automatic implementation attempts",
+      description: "After this many failed implementation reviews, wait for a human decision instead of retrying automatically.",
+      default: "3",
+    },
   });
 
   const store = createStore(bb);
   const tasksDomain = registerProviderAwareTasksApi(bb, store, settings);
-  registerOpenSpecWorkflow(bb, store, tasksDomain.workflowBeads);
+  registerOpenSpecWorkflow(bb, store, tasksDomain.workflowBeads, {
+    async maxImplementationAttempts() {
+      const value = Number.parseInt((await settings.get()).maxImplementationAttempts, 10);
+      return Number.isSafeInteger(value) && value >= 1 && value <= 20 ? value : 3;
+    },
+  });
   registerAttachments(bb, store.tasks);
   registerTasksCli(bb, store, statusPayload(), tasksDomain);
   registerDelegation(bb, store);

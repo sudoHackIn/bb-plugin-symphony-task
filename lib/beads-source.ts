@@ -617,6 +617,19 @@ export class BeadsTaskSource implements TaskSource {
     );
   }
 
+  async getMetadata(id: string, key: string): Promise<string | null> {
+    const issue = parseIssue(await this.run(["show", id, "--json"]));
+    return metadataString(issue, key);
+  }
+
+  async setMetadata(id: string, key: string, value: string | null): Promise<void> {
+    const args = ["update", id];
+    if (value === null) args.push("--unset-metadata", key);
+    else args.push("--set-metadata", `${key}=${value}`);
+    args.push("--json");
+    await this.run(args);
+  }
+
   async listLinks(id: string): Promise<UnifiedTaskLink[]> {
     const [down, up] = await Promise.all([
       this.run(["dep", "list", id, "--direction", "down", "--json"]),
